@@ -8,6 +8,7 @@ Created on Thu Oct 24 17:26:35 2019
 # -----------------------------------------------------------------------------
 import os
 mdir = os.path.dirname( os.path.abspath(__file__) ) 
+s = os.sep
 
 # import imp
 import numpy as np
@@ -34,7 +35,8 @@ J2_wgs84 = utl.J2_wgs84
 w_wgs84 = utl.w_wgs84
 
 # -----------------------------------------------------------------------------
-#plot_RgbArray = utl.plot_RgbArray
+raster_globe = mdir +s+ 'gis' +s+ 'raster' +s+ 'raster_globe.tiff'
+bat_eu_emodnet = mdir +s+ 'gis' +s+ 'raster' +s+ 'EU_SEA_EMODnet_2018_w84.tif'
 
 # -----------------------------------------------------------------------------
 def tmi(t1, t2=None):

@@ -585,7 +585,7 @@ def line_remres( xyzl, xyz_ref, wind_size=None, prjcode_in=4326, prjcode_out=432
                       line_c=line_c_origin, method='linear' )
         
         if cover.shape[ 0 ] > 0 :
-            minz, maxz, meanz, stdz = utl.statistics( cover[ :, 6 ], decimals=2 )
+            minz, maxz, meanz, stdz = utl.stat( cover[ :, 6 ], decimals=2 )
         
             print( 'cross-over error:', 'min =',minz,',', 'max =',maxz,',', 
                                         'mean =',meanz,',', 'std =',stdz )  
@@ -620,16 +620,22 @@ def line_remres( xyzl, xyz_ref, wind_size=None, prjcode_in=4326, prjcode_out=432
         
     if plot_cross is True :
         
-        plt.figure()
+        plt.figure(figsize=(8, 6))
         
         plt.subplot(1,2,1)
-        cover_old = utl.cross_over_points( xyzl_out, plot=True, vmin=vminc, vmax=vmaxc, 
+        cover_old = utl.cross_over_points( xyzl_out, plot=False, vmin=vminc, vmax=vmaxc, 
             colorbar=False, method='linear', x_c=x_c_origin, y_c=y_c_origin, 
             z_c=z_c_origin, line_c=line_c_origin )  
+        
+        Min, Max, Mean, Std = utl.stat( cover_old[:,6], decimals=2 )
+        plt.scatter( xyzl_out[:,x_c_origin], xyzl_out[:,y_c_origin], s=s, 
+                     marker='_', c='k', alpha=0.5, linewidths=0.05 )
+        plt.scatter( cover_old[:,0], cover_old[:,1], s=s*10, c=cover_old[:,6], cmap='rainbow',
+                     vmin=vminc, vmax=vmaxc )
         plt.gca().axes.xaxis.set_visible(False)
-        plt.gca().axes.yaxis.set_visible(False)         
-        if vminc == None : vminc = np.min( cover_old[:,6] ) 
-        if vmaxc == None : vmaxc = np.max( cover_old[:,6] )    
+        plt.gca().axes.yaxis.set_visible(False)
+        
+        plt.title( 'Cross-Over Error Original : \n' + f'Min={Min}  Max={Max}  Mean={Mean}  Std={Std}' )        
 
         plt.subplot(1,2,2)
         Min, Max, Mean, Std = utl.stat( cover[:,6], decimals=2 )
@@ -640,9 +646,13 @@ def line_remres( xyzl, xyz_ref, wind_size=None, prjcode_in=4326, prjcode_out=432
         plt.gca().axes.xaxis.set_visible(False)
         plt.gca().axes.yaxis.set_visible(False)
         
-        plt.title( 'Cross-Over Error : \n' + f' Min={Min}  Max={Max}  Mean={Mean}  Std={Std}' )        
+        plt.title( 'Cross-Over Error Final : \n' + f' Min={Min}  Max={Max}  Mean={Mean}  Std={Std}' )    
 
-        plt.colorbar( ax=plt.gcf().axes, location='bottom', shrink=0.6 )        
+        plt.tight_layout()    
+
+        cbar = plt.colorbar( ax=plt.gcf().axes, location='bottom', shrink=0.6 )     
+        plt.text(1.02, 0.5, '[ mGal ]', va='center', ha='left', rotation=0, transform=cbar.ax.transAxes)
+
         
     if plot_lines == True :
         
@@ -820,7 +830,7 @@ def line_levellig( xyzl, prjcode_in=4326, prjcode_out=4326, dist=None, x_c=0, y_
         cover = utl.cross_over_points( xyzl_new, vmin=vminc, vmax=vmaxc, method='linear',
                                        x_c=x_c, y_c=y_c, z_c=z_c, line_c=line_c )  
         
-        minz, maxz, meanz, stdz = utl.statistics( cover[ :, 6], decimals=2 )
+        minz, maxz, meanz, stdz = utl.stat( cover[ :, 6], decimals=2 )
     
         print( 'iteration ', itr+1, ':\n', 
                'cross-over error:', 'min =',minz,',', 'max =',maxz,',', 
@@ -967,7 +977,7 @@ def median_levellig( xyzl, prjcode_in=4326, prjcode_out=4326, dist=None, x_c=0, 
                     line_c=line_c, method='linear' )
 
         print( cover.shape )
-        minz, maxz, meanz, stdz = utl.statistics( cover[ :, 6], decimals=2 )
+        minz, maxz, meanz, stdz = utl.stat( cover[ :, 6], decimals=2 )
 
         print( 'iteration ', itr+1, ':\n', 
                 'cross-over error:', 'min =',minz,',', 'max =',maxz,',', 

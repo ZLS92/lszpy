@@ -1029,7 +1029,7 @@ def btw_filt( array, lowcut=None, highcut=None, sx=1, sy=1, order=6, remove='mea
         array = utl.fillnan( array, method=fillnan, smooth=0,
                              maxSearchDist=maxSearchDist, iter=iter, edges=True )
     
-    p1, r1 = radial_fft( array, sx=sx, sy=sy, plot=False, fillnan=fillnan, 
+    p1, r1,_ = radial_fft( array, sx=sx, sy=sy, plot=False, fillnan=fillnan, 
                          maxSearchDist=maxSearchDist, iter=iter,
                          padw=padw, pmode=pmode, alpha=alpha, smooth=smooth ) 
 

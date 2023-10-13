@@ -808,6 +808,7 @@ def plta( array, vmin=None, vmax=None, tit=None, lim=None, stat=6, sbplt=[],
         vmax = Mean + 2 * Std
     
     if lim != None :
+        lim = copy.copy( lim )
         if len( lim ) == 2 :
             lim = xy2lim( x=lim[0], y=lim[1] )
         dx = ( lim[1] - lim[0] ) / array.shape[0] 
@@ -1768,7 +1769,10 @@ def block_m( x, y, z, wind_size, method='mean', data_type='vector', lim=None,
         x, y = prjxy(prjcode_in, prjcode_out, x, y)
     
     if lim == None:
-        lim = [np.min(x), np.max(x), np.min(y), np.max(y)]     
+        lim = [np.min(x), np.max(x), np.min(y), np.max(y)]
+        
+#    x_blk = np.linspace(lim[0], lim[1], int( abs( lim[0]-lim[1] ) / wind_size ) )
+#    y_blk = np.linspace(lim[2], lim[3], int( abs( lim[2]-lim[3] ) / wind_size ) )          
          
     x_blk = np.arange(lim[0], lim[1], wind_size)
     y_blk = np.arange(lim[2], lim[3], wind_size) 
@@ -1776,35 +1780,38 @@ def block_m( x, y, z, wind_size, method='mean', data_type='vector', lim=None,
     Xb, Yb = np.meshgrid(x_blk, y_blk)
     xb, yb, zb = np.hsplit( np.zeros( ( (Xb.shape[0]-1) * (Xb.shape[1]-1), 3 ) ), 3 )
     
-    win_idx = ((x[:, np.newaxis] > Xb[:-1, :-1]) & (x[:, np.newaxis] < Xb[1:, :-1]) &
-               (y[:, np.newaxis] > Yb[:-1, :-1]) & (y[:, np.newaxis] < Yb[:-1, 1:]))
+    n = 0
+    for idx, _ in np.ndenumerate( Xb ) :
+     
+        i, j = idx
+        if ( i == Xb.shape[0]-1 ) or ( j == Xb.shape[1]-1 ) :
+            continue
         
-    if method == 'mean':
-        xb = np.mean(np.where(win_idx, x[:, np.newaxis], np.nan), axis=0)
-        yb = np.mean(np.where(win_idx, y[:, np.newaxis], np.nan), axis=0)
-        zb = np.mean(np.where(win_idx, z[:, np.newaxis], np.nan), axis=0)
-
-    elif method == 'median':
-        xb = np.median(np.where(win_idx, x[:, np.newaxis], np.nan), axis=0)
-        yb = np.mean(np.where(win_idx, y[:, np.newaxis], np.nan), axis=0)
-        zb = np.mean(np.where(win_idx, z[:, np.newaxis], np.nan), axis=0)
+        win_idx = ( ( x > Xb[ ( i, j ) ] ) & ( x < Xb[ ( i, j + 1 ) ]) & \
+                    ( y > Yb[ ( i, j ) ] ) & ( y < Yb[ ( i + 1, j ) ] ) )
+        
+        if method == 'mean':              
+            xb[n] = np.mean( x[ win_idx ] )
+            yb[n] = np.mean( y[ win_idx ] )
+            zb[n] = np.mean( z[ win_idx ] )
+            
+        if method == 'median':              
+            xb[n] = np.median( x[ win_idx ] )
+            yb[n] = np.median( y[ win_idx ] )
+            zb[n] = np.median( z[ win_idx ] )
             
         n += 1    
 
     if data_type == 'grid' :
-
         if adjst_lim == True :
             x_grid = np.arange(np.min(xb), np.max(xb)+wind_size, wind_size)
             y_grid = np.arange(np.min(yb), np.max(yb)+wind_size, wind_size)
-
         if adjst_lim == False :
             x_grid = np.linspace(np.min(xb), np.max(xb), int( ( np.max(xb) - np.min(xb) ) / wind_size ) )
             y_grid = np.linspace(np.min(yb), np.max(yb), int( ( np.max(yb) - np.min(yb) ) / wind_size ) )
-
         Xg, Yg = np.meshgrid( x_grid, y_grid )
         Zg = xyz2xy( ( xb.ravel(), yb.ravel(), zb.ravel() ), ( Xg, Yg ), method='linear' )[0]
         xb, yb, zb = Xg, Yg, Zg
-
         if ( y[0,0] - y[-1,0] ) * ( yb[0,0] - yb[-1,0] ) < 0 :
             yb = np.flipud( yb )
             zb = np.flipud( zb )

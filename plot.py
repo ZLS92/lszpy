@@ -944,7 +944,7 @@ def hist( data, w=None, edgecolor='w', color='b', xlabel='variable', ylabel='$co
 def static_slices( NpArr3d, xyz_start, xyz_end, nan2val=0,
                    vmin=None, vmax=None, array_type='xyz',
                    xyz_lim=None, stepxy=None, stepz=None, res_fac=None,
-                   xlabel=None, ylabel=None ) :
+                   xlabel=None, ylabel=None, method='nearest' ) :
 
     if array_type == 'ndarray':
         
@@ -1049,7 +1049,7 @@ def static_slices( NpArr3d, xyz_start, xyz_end, nan2val=0,
     
     ps = utl.sp.interpolate.griddata( ( X.ravel(), Y.ravel(), Z.ravel() ), 
                                       NpArr3d.ravel(), ( xs, ys, zs ),
-                                      method='linear' )
+                                      method=method )
 
     zt = np.rot90( zs.reshape( ( len(l), len(z) ) ) )
     xt = np.rot90( ls.reshape( ( len(l), len(z) ) ) )
@@ -1065,8 +1065,8 @@ def static_slices( NpArr3d, xyz_start, xyz_end, nan2val=0,
     print( lim )
     
     ax = plt.pcolormesh( xt, zt, yt, vmin=vmin, vmax=vmax, 
-                    cmap='jet', edgecolors='k', linewidth=0.1, shading='auto', 
-                    snap=True )
+                    cmap='jet',  linewidth=0, shading='auto', 
+                    snap=True, rasterized=True )
     
     plt.xlabel( xlabel )
     plt.ylabel( ylabel )
