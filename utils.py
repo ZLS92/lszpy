@@ -33,7 +33,7 @@ from osgeo import gdal
 G = 6.6742*1e-11 # [m3/(kg *s^2)]
 M = 5.97*1e24 # [kg]
 a_wgs84 = 6378137 # [m]
-c_wgs84 = 6356758 # [m]
+c_wgs84 = 6356752 # [m]
 R_wgs84 = ((a_wgs84**2)*c_wgs84)**(1/3) # [m]
 J2_wgs84 = 1.081874*1e-3
 w_wgs84 = 7.292115*1e-5 # [rad/sec]
@@ -499,7 +499,7 @@ def find_by_att( dat1, dat2, col_xy, delta_xy, col_att, delta_att, condition=Tru
     return mask1, dat1_msk, idx21
 
 # -----------------------------------------------------------------------------
-def ell_radius( lat, radians=False ) :
+def ell_radius( lat, h=0, radians=False, a=a_wgs84, c=c_wgs84 ) :
     """
     This function calculates the radius of the Earth at a given latitude 
     based on the WGS84 ellipsoid model.
@@ -528,10 +528,10 @@ def ell_radius( lat, radians=False ) :
     if radians is False :
         lat = np.copy( np.deg2rad( lat ) )
         
-    num = ( ( a_wgs84**2 * np.cos( lat ) )**2 ) + ( ( c_wgs84**2 * np.sin( lat ) )**2 )   
-    den = ( ( a_wgs84 * np.cos( lat ) )**2 ) + ( ( c_wgs84 * np.sin( lat ) )**2 )  
+    num = ( ( a**2 * np.cos( lat ) )**2 ) + ( ( c**2 * np.sin( lat ) )**2 )   
+    den = ( ( a * np.cos( lat ) )**2 ) + ( ( c * np.sin( lat ) )**2 )  
     
-    R = np.sqrt( num / den )
+    R = np.sqrt( num / den ) + h
     
     return R
 
@@ -3336,21 +3336,21 @@ def print_table( table, headers=None, space=12, decimals=2, rows=[], cols=[],
     return table
 
 # -----------------------------------------------------------------------------
-def combine64( years, months=1, days=1, weeks=None, hours=None, minutes=None,
-               seconds=None, milliseconds=None, microseconds=None, nanoseconds=None ):
+def combine64( years, months=1, days=1, hours=0, minutes=0,
+               seconds=0, milliseconds=0, microseconds=0, nanoseconds=0 ):
     
     years = np.asarray(years) - 1970
     months = np.asarray(months) - 1
     days = np.asarray(days) - 1
 
-    types = ( '<M8[Y]', '<m8[M]', '<m8[D]', '<m8[W]', '<m8[h]',
+    types = ( '<M8[Y]', '<m8[M]', '<m8[D]',  '<m8[h]',
               '<m8[m]', '<m8[s]', '<m8[ms]', '<m8[us]', '<m8[ns]' )
     
     if np.any( np.mod( seconds, 1 ) != 0 ) :
         nanoseconds = seconds.copy() * 1e9
         seconds=None
     
-    vals = ( years, months, days, weeks, hours, minutes, seconds,
+    vals = ( years, months, days, hours, minutes, seconds,
              milliseconds, microseconds, nanoseconds )
     
     datetime_type = np.sum(np.asarray(v, dtype=t) for t, v in zip(types, vals)
