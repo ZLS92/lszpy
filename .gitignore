@@ -4,6 +4,7 @@ ss/
 Simulps/
 PyCat3d/
 .env
-.env
-gis/*
-EMAG/*
+gis
+EMAG
+TC_Forsberg
+UBC_grav3d
