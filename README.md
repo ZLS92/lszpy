@@ -23,3 +23,21 @@ Geologists, geophysicists, students, or anyone interested in learning and experi
 1. Clone the repository:
    ```bash
    git clone https://github.com/your-username/lszpy.git
+
+## 👤 Attribution & Author
+
+- This project was developed and is maintained by **Dr. Luigi Sante Zampa**.
+- Parts of this project use or adapt functionalities inspired by the  
+  [**Harmonica**](https://www.fatiando.org/harmonica/latest/) library by Leonardo Uieda.  
+  If you use **LszPy**, please consider citing **Harmonica** as well:
+
+  > Uieda, L. (2020).  
+  > *Harmonica: Forward modelling and inversion for geophysics.*  
+  > Zenodo. [https://doi.org/10.5281/zenodo.3628741](https://doi.org/10.5281/zenodo.3628741)
+
+## 📜 License
+
+This repository is distributed under the MIT License.  
+Please check the respective licenses of third-party libraries like **Harmonica**.
+
+---
