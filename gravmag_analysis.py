@@ -14,13 +14,14 @@ from numba import jit, njit
 import numpy as np, scipy as scy, os
 from scipy import signal
 import matplotlib.pyplot as plt
-utl = imp.load_source( 'module.name', mdir+os.sep+'utils.py' )
-shp = imp.load_source( 'module.name', mdir+os.sep+'shp_tools.py' )
-rt = imp.load_source( 'module.name', mdir+os.sep+'raster_tools.py' )
+
+import lszpy.utils as utl
+import lszpy.shp_tools as shp
+import lszpy.raster_tools as rt
 
 # -----------------------------------------------------------------------------
 plta = utl.plta
-pltr = utl.pltr
+pltr = rt.pltr
 
 # -----------------------------------------------------------------------------
 # Constants
@@ -538,9 +539,9 @@ def dz( array, method='fft', sx=1.0, sy=1.0, remove='mean', order=[1], padw=0,
     return Dz
 
 # -----------------------------------------------------------------------------
-def vi(array, sx=1.0, sy=1.0, remove=None, order=[1], padw=0, nanfill='gdal',
-       pmode='gdal', nodata=True, alpha=0, mask=None, plot=False, 
-       vmin=None, vmax=None ):
+def vi( array, sx=1.0, sy=1.0, remove=None, order=[1], padw=0, nanfill='gdal',
+        pmode='gdal', nodata=True, alpha=0, mask=None, plot=False, 
+        vmin=None, vmax=None ):
 
     nan = np.isnan( array )
     
@@ -557,7 +558,7 @@ def vi(array, sx=1.0, sy=1.0, remove=None, order=[1], padw=0, nanfill='gdal',
     
     K, fft2, _, _, _, _ = fft2d( ar_pad, sx, sy )
     
-    K[0,0] = min( ( K[0,1], K[1,1], K[1,0] ) )/2
+    K[0,0] = min( ( K[0,1], K[1,1], K[1,0] ) ) / 2
     
     V_pad = np.real( np.fft.ifft2( fft2 / K ) )
     V = utl.crop_pad( V_pad, pad_shape )
@@ -729,9 +730,21 @@ def canny( array, xy=None, ltr=0.05, htr=0.09,
     return xp, yp     
 
 # -----------------------------------------------------------------------------
-def parker( array, rho, n=5, sx=1.0, sy=1.0, padw=0, pmode='gdal', nanfill='gdal',
-            mask=None, nodata=True, plot=False, vmin=None, vmax=None, remove=None,
-            z0=None, add_slab=False, hillshade=False, ve=3, neg2pos=False, remove_mean=True ) :
+def parker( array, 
+            drho, 
+            n=5, 
+            sx=1.0, 
+            sy=1.0, 
+            padw=0, 
+            pmode='gdal', 
+            mask=None, 
+            nodata=True, 
+            plot=False, 
+            vmin=None, 
+            vmax=None,
+            obs_lev=None,
+            ref_lev=None,
+            neg2pos=False ) :
     """
     @author: L.S.Zampa 
     
@@ -745,8 +758,9 @@ def parker( array, rho, n=5, sx=1.0, sy=1.0, padw=0, pmode='gdal', nanfill='gdal
     ----------
     array : NUMPY 2D-ARRAY
         Input 2D grid-interface in meters
-    rho : FLOAT or INT
-        Density contrast between the two layers separated by the interace
+    drho : FLOAT or INT
+        Density difference in kg/m^3, between the matirial above the interface and below it.
+        i.e., drho = rho_above - rho_below
     n : INT, optional
         Order of approximation of the Taylor series.
     sx : FLOAT or INT, optional
@@ -774,15 +788,23 @@ def parker( array, rho, n=5, sx=1.0, sy=1.0, padw=0, pmode='gdal', nanfill='gdal
         
     """
     
-    array = np.copy( array ).astype(float)
-    nan = np.isnan( array )
+    h_array = np.copy( array ).astype(float)
+    nan = np.isnan( h_array )
         
     if neg2pos == True :
-        array = 0 - array    
-    if z0 is None :
-        z0 = np.abs( np.nanmean( array ) )
+        h_array = h_array * -1    
 
-    ar_pad, original_shape_indx = utl.pad_array( array, padw, pmode )
+    if ref_lev is None :
+        ref_lev = np.nanmean( h_array )
+
+    if obs_lev is None :
+        obs_lev = np.nanmean( h_array )
+
+    z0 = np.abs( np.abs(obs_lev) - np.abs( ref_lev ) )
+
+    h_array = h_array - ref_lev
+
+    ar_pad, original_shape_indx = utl.pad_array( h_array, padw, pmode )
 
     taylor_fft2 = np.zeros( ar_pad.shape )
     
@@ -791,15 +813,9 @@ def parker( array, rho, n=5, sx=1.0, sy=1.0, padw=0, pmode='gdal', nanfill='gdal
         K, fft2, _, _, _, _ = fft2d( pwr_array, sx=sx, sy=sy )
         taylor_fft2 = taylor_fft2 +  ( K ** ( ip - 1 ) / np.math.factorial( ip ) ) * fft2
 
-    fft_grav = -2 * np.pi * G * rho * np.exp( -K * z0 ) * taylor_fft2
+    fft_grav = -2 * np.pi * G * drho * np.exp( -K * z0 ) * taylor_fft2
     grav_pad = np.real( np.fft.ifft2( fft_grav ) ) * 1e5
     grav = utl.crop_pad( grav_pad, original_shape_indx )
-
-    if remove_mean is True :
-        grav = grav - np.nanmean( grav )
-    
-    if add_slab is True :
-        grav = grav + 2 * np.pi * G * rho * z0 * 1e5
 
     if nodata is True :
         grav[nan] = np.nan
@@ -808,14 +824,12 @@ def parker( array, rho, n=5, sx=1.0, sy=1.0, padw=0, pmode='gdal', nanfill='gdal
         arraym = array      
     else:
         grav[mask] = np.nan
-        arraym = np.copy(array)
+        arraym = np.copy( array )
         arraym[mask] = np.nan
         
     if plot == True:
-        utl.plta( arraym, sbplt=[1, 2, 1], tit='discontinuity [m]', 
-                  hillshade=hillshade, ve=ve )
-        utl.plta( grav, vmin, vmax, sbplt=[1, 2, 2], tit='grav_effect [mGal]',
-                  hillshade=hillshade, ve=ve)
+        utl.plta( arraym, sbplt=[1, 2, 1], tit='discontinuity [m]')
+        utl.plta( grav, vmin, vmax, sbplt=[1, 2, 2], tit='grav_effect [mGal]')
         
     return grav
 
@@ -910,14 +924,11 @@ def polyfit2d( array, order=[1], mask=None, sx=1.0, sy=1.0, lim=None,
     return rr, pp, param 
 
 # -----------------------------------------------------------------------------
-def fft2d( array, sx=1.0, sy=1.0, remove=None, order=1 ):
+def fft2d( array, sx=1.0, sy=1.0, 
+           remove=None, order=1 ):
    
     pny, pnx = array.shape
-    
-#    Lx, Ly = pnx * sx, pny * sy 
-#    kx = np.fft.fftshift( (2*np.pi/Lx)*np.linspace(-pnx/2,pnx/2, pnx) ) # wave-number in x direction
-#    ky = np.fft.fftshift( (2*np.pi/Ly)*np.linspace(-pny/2,pny/2, pny) ) # wave-number in y direction  
-#      
+
     kx = 2 * np.pi * np.fft.fftfreq( pnx, sx ) # wave-number in x direction
     ky = 2 * np.pi * np.fft.fftfreq( pny, sy ) # wave-number in y direction
     
@@ -937,7 +948,6 @@ def fft2d( array, sx=1.0, sy=1.0, remove=None, order=1 ):
     
     return K, fft2, KX, KY, PDS, SPDS
 
-
 # -----------------------------------------------------------------------------
 def radial_fft( array, 
                 sx=1, sy=1, 
@@ -945,7 +955,7 @@ def radial_fft( array,
                 units='[units]', 
                 remove='mean',
                 padw=0, 
-                pmode='symmetric', 
+                pmode='thin_plate', 
                 fillnan=None, 
                 order=[1], 
                 alpha=None,
@@ -953,121 +963,136 @@ def radial_fft( array,
                 iter=None, 
                 smooth=0, 
                 tension=0.35,
-                num_segments=None,
-                keep_nodes=None,
-                threshold=1e-2,
-                move_nodes=[]   ) :
+                **kwargs ) :
 
     if remove is None: 
         array = array
     if remove == 'mean': 
         array = array - np.nanmean( array ) 
     if remove == 'trend': 
-        array = polyfit2d( array=array, order=order )[0]    
-      
+        array = polyfit2d( array=array, order=order )[0]
+
     if fillnan is not None: 
         if fillnan is True :
             fillnan = 'gdal'
         array = utl.fillnan( array, method=fillnan, smooth=smooth,
-                maxSearchDist=maxSearchDist, iter=iter, edges=True, tension=tension )
+                maxSearchDist=maxSearchDist, iter=iter, 
+                edges=True, tension=tension )
     
-    dx, dy = utl.copy(sx), utl.copy(sy)
-    ar_pad, _= utl.pad_array( array, 
-                              padw, pmode, 
-                              alpha=alpha, 
-                              sqr_area=False )
-    
-    sx, sy = utl.copy(dx), utl.copy(dy)
+    if padw != 0:
+        ar_pad, _= utl.pad_array( array, 
+                                padw, pmode, 
+                                alpha=alpha, 
+                                sqr_area=False, 
+                                equal_shape=True)
+    else:
+        ar_pad = array
 
-    gfft = fft2d( ar_pad, sx, sy, order=order )
+    gfft = fft2d( ar_pad, sx, sy )
     
     k = gfft[0]
     kx = gfft[2]
     ky = gfft[3]
     PDS = np.log( gfft[4] )
     SPDS = gfft[5]
-    
+
     max_radius = min( kx.max(), ky.max() )
-    
     ring_width = max( np.unique(kx)[(np.unique(kx) > 0 )][0], 
                       np.unique(ky)[(np.unique(ky) > 0 )][0] )
-    
+
     PDS_radial = []
     k_radial = []
     radius_i = 0
     
     while True:
+
+        if radius_i == 0:
+            inside = k <= 0.5 * ring_width
+        else:
+            inside = np.logical_and( k > (radius_i - 0.5) * ring_width, 
+                                     k <= (radius_i + 0.5) * ring_width  )
+            
+        PDS_radial.append( PDS[inside].mean() )
+        k_radial.append( radius_i * ring_width )
+        
         radius_i += 1
+
         if radius_i * ring_width > max_radius:
             break
-        else:
-            if radius_i == 0:
-                inside = k <= 0.5 * ring_width
-            else:
-                inside = np.logical_and( k >  (radius_i - 0.5) * ring_width, 
-                                         k <= (radius_i + 0.5) * ring_width  )
-                
-            PDS_radial.append( PDS[inside].mean() )
-            k_radial.append( radius_i * ring_width )
 
-    k_radial = np.array( k_radial )
-    PDS_radial = np.array( PDS_radial )
+    for istart in range( len( PDS_radial ) ):
+        if PDS_radial[istart+1] >= PDS_radial[istart] :
+            continue
+        else:
+            break
+    k_radial = np.array( k_radial[istart:] )
+    PDS_radial = np.array( PDS_radial[istart:] )
     
     if plot == True:
 
-        _ = utl.fit_segmented_line( k_radial, PDS_radial, 
-                                    num_segments=num_segments,
-                                    keep_nodes=keep_nodes,
-                                    plot=True, threshold=threshold,
-                                    move_nodes=move_nodes )
+        if 'round' in kwargs:
+            nround = kwargs['round']
+            kwargs.pop('round')
+        else :
+            nround = 2
 
-        ax1 = plt.gca()
-        ax1.set_ylabel('ln (PSD)')
-        ax1.set_xlabel('Wavelength ' + units)  # Update the x-label
-        # Get current x-ticks and labels
-        xticks = ax1.get_xticks()
-        new_xticklabels = ["{:.2f}".format(sx*sy/xtick) 
-                            if xtick != 0 else "0" for xtick in xticks]
+        if 'place_nodes' in kwargs and kwargs['place_nodes'] :
+            for i, ni in enumerate( kwargs['place_nodes'][1] ):
+                kwargs['place_nodes'][1][i] = 1 / kwargs['place_nodes'][1][i]
+                print(kwargs['place_nodes'][1][i])
+
+        segments = utl.fit_segmented_line( k_radial, 
+                                           PDS_radial, 
+                                           plot=False, 
+                                           **kwargs )
+
+        plt.scatter( k_radial, PDS_radial, color='k', 
+                     marker='o', facecolors='none')
+
+        depths = []
+        ymin = plt.gca().get_ylim()[0]
+        ymax = PDS_radial.max()
+        for i, seg in enumerate( segments ):
+            if i > 0:
+                seg0 = segments[i-1]
+                slope = ( seg0[1] - seg[1]) / (seg0[0] - seg[0] )
+                depth = np.round( np.abs( slope * 2 ), nround )
+                if nround <= 0 :
+                    depth = int( depth )
+                depths.append( depth )
+                plt.plot( [seg0[0], seg[0]], [seg0[1], seg[1]], 
+                          label=f"Depth: { depths[-1] }" )
+                if i < len(segments) - 1:
+                    plt.vlines( seg[0], ymin, seg[1], 
+                                linestyles='dashed')
+                    ptext = np.round( 1/seg[0], nround )
+                    if nround <= 0 :
+                        ptext = int( ptext )
+                    plt.text( seg[0], ymin, 
+                            f'{ptext}', 
+                            ha='left', va='bottom' )
+
+        # Label the axes
+        plt.ylabel('ln( PSD )')
         
-        # Set new x-tick labels
-        ax1.set_xticklabels(new_xticklabels)
+        # Get current x-ticks
+        xticks = plt.gca().get_xticks()
 
-        # Get all children of the axes
-        children = ax1.get_children()
+        # Convert x-ticks from wavenumbers to wavelengths
+        new_xticklabels = [ f"{ np.round( 1 / xtick, nround ) }" 
+                            if xtick != 0 else "∞" for xtick in xticks ]
 
-        # Filter for Text instances
-        text_labels = [child for child in children if isinstance(child, utl.MPLtext.Text)]
+        # Set new x-tick labels with wavelengths
+        plt.gca().set_xticklabels(new_xticklabels)
 
-        # Filter for text objects inside the axes
-        inside_text_labels = [ label for label in text_labels 
-                               if label.get_position()[0] >= ax1.get_xlim()[0] and 
-                               label.get_position()[0] <= ax1.get_xlim()[1] and 
-                               label.get_position()[1] >= ax1.get_ylim()[0] and 
-                               label.get_position()[1] <= ax1.get_ylim()[1] ]
+        # Update the x-axis label to reflect wavelengths
+        plt.xlabel(f'Wavelength {units}')
 
-        # Change the text of the labels
-        for label in inside_text_labels:
-            old_text = label.get_text()
-            # Check if the old text can be converted to a float
-            try:
-                old_number = float(old_text)
-                # If successful, calculate the new text and set it
-                new_text = "{:.2f}".format(sx*sy/old_number) if old_number != 0 else "0"
-                label.set_text(new_text)
-            except ValueError:
-                # If the old text cannot be converted to a float, do nothing
-                pass
-
-        # Set the function to format the cursor position
-        def format_coord(x, y):
-            # Convert x from original values to new labels
-            new_x = "{:.2f}".format(sx*sy/x) if x != 0 else "0"
-            return 'x={}, y={}'.format(new_x, y)
+        # Add a legend
+        plt.legend()
         
-
-        ax1.format_coord = format_coord
-
         plt.tight_layout()
+        plt.show()
         
     return PDS_radial, k_radial, k
 
@@ -1467,9 +1492,23 @@ def vel2den( vp, method='Gardner' ) :
     return den
 
 # -----------------------------------------------------------------------------
-def DeTrend_filt( array, radius=4, pmode='linear_ramp', padw=0, alpha=None,
-                  plot=False, vmin=None, vmax=None, ftype='mean',
-                  iter=1, factor=2, filt=False, nodata=True, mask=None,
+def DeTrend_filt( array, 
+                  radius=4,
+                  remove=None, 
+                  nanfill=None, 
+                  pmode='linear_ramp', 
+                  padw=0, 
+                  alpha=None, 
+                  zoom=None,
+                  plot=False, 
+                  vmin=None, 
+                  vmax=None, 
+                  ftype='mean',
+                  iter=1, 
+                  factor=2, 
+                  filt=False, 
+                  nodata=True, 
+                  mask=None,
                   sliding_circle=True ) :
     """
     Applies detrending and filtering to a 2D array.
@@ -1511,95 +1550,77 @@ def DeTrend_filt( array, radius=4, pmode='linear_ramp', padw=0, alpha=None,
         The trend component of the array.
     """
 
+    array = np.copy( array )
+
+    if zoom is not None:
+        array = utl.resampling( array, zoom, spl_order=1 )
+
     nan = np.isnan( array )
-    
+    if remove == 'mean': 
+        initial_mean = np.nanmean( array )
+        array = array - initial_mean
+    else:
+        initial_mean = 0
+    if nanfill is not None: 
+        array = utl.fillnan( array, method=nanfill )
+
+    nan = np.isnan(array)
     ar_pad, original_shape_indx = utl.pad_array( array, radius*2+padw, alpha=alpha, 
-                            mode=pmode, ptype=None, plot=False )
+                                                 mode=pmode, ptype=None, plot=False)
 
     ar_filt = np.copy( array )
     trend = np.copy( array )
-    # X1,Y1 = np.meshgrid( np.arange(radius*2), np.arange(radius*2) )
 
     # Create a grid of points
     X1, Y1 = np.meshgrid(np.arange(-radius, radius+1), np.arange(-radius, radius+1))
 
     # Create a circular mask
-    if sliding_circle :
-
-        # Create a circular mask
+    if sliding_circle:
         wmsk = X1**2 + Y1**2 <= radius**2
-
-        # Apply the mask to X1 and Y1
         X1, Y1 = X1[wmsk], Y1[wmsk]
-
-        # Flatten the mask to be 1D
         wmsk = wmsk.flatten()
-
-    else :
-        wmsk = np.full( X1.shape, True ).flatten()
+    else:
+        wmsk = np.full(X1.shape, True).flatten()
 
     X1 = X1.flatten()
     Y1 = Y1.flatten()
 
     A = np.vstack([X1, Y1, np.ones(Y1.shape[0])]).T
 
-    # @jit(forceobj=True, parallel=True)
-    def loop_par( array,
-                  ar_pad, 
-                  ar_filt, 
-                  trend,
-                  radius, 
-                  original_shape_indx, 
-                  X1, Y1, A ):
+    # Vectorized detrending
+    for idx, ai in np.ndenumerate( array ):
+    
+        xi, yi = original_shape_indx[0] + idx[0], original_shape_indx[2] + idx[1]
+        wi = ar_pad[xi-radius:xi+radius+1, yi-radius:yi+radius+1].ravel()[wmsk]
+        C, _, _, _ = np.linalg.lstsq(A, wi, rcond=None)
+        ti = C[0]*X1 + C[1]*Y1 + C[2]
+        ri = wi - ti
+        ar_filt[idx[0], idx[1]] = ri[len(ri)//2]
+        trend[idx[0], idx[1]] = ti[len(ti)//2]
 
-        for idx, ai in np.ndenumerate( array ) :
-            xi, yi = original_shape_indx[0]+idx[0], original_shape_indx[2]+idx[1] 
-            # wi = ar_pad[ xi-radius:xi+radius, yi-radius:yi+radius ]
-
-            wi = ar_pad[ xi-radius:xi+radius+1, yi-radius:yi+radius+1 ].ravel()[wmsk]
-
-            C,_,_,_ = utl.sp.linalg.lstsq( A, wi )    # coefficients
-            ti = C[0]*X1 + C[1]*Y1 + C[2]
-            ri = wi-ti
-    #        ri, ti, _  = polyfit2d( wi, order=[1] )
-
-            # ar_filt[ idx[0], idx[1] ] = ri[ radius, radius ]
-            # trend[ idx[0], idx[1] ] = ti[ radius, radius ]
-
-            ar_filt[ idx[0], idx[1] ] = ri[len(ri)//2]
-            trend[ idx[0], idx[1] ] = ti[len(ti)//2]
-
-        return ar_filt, trend
-
-    # Call the function with X1 and Y1 as arguments
-    ar_filt, trend = loop_par( array,
-                               ar_pad, 
-                               ar_filt, 
-                               trend,
-                               radius, 
-                               original_shape_indx, 
-                               X1, Y1, A )
-
-    if filt is True :
-        ar_filt = utl.filt2d( ar_filt, ftype=ftype, 
-                              iter=iter, radius=radius, 
-                              factor=factor )
-
-    if nodata is True :
+    if nodata:
         ar_filt[nan] = np.nan
+    
+    if zoom is not None:
+        trend = utl.resampling( ar_pad, 1/zoom, spl_order=1 )
+        ar_filt = utl.resampling( ar_filt, 1/zoom, spl_order=1 )
 
-    if mask is not None :
+    if initial_mean != 0:
+        trend += initial_mean
+
+    if filt:
+        ar_filt = utl.filt2d(ar_filt, ftype=ftype, 
+                             iter=iter, radius=radius, factor=factor)
+
+    if mask is not None:
         ar_filt[mask] = np.nan
 
-    if plot == True:
-
-        plta( array, sbplt=[1, 3, 1], tit='Original')
-        plta( trend, vmin, vmax, sbplt=[1, 3, 2], tit='Trend', new_fig=False)
-        plta( ar_filt, vmin, vmax, sbplt=[1, 3, 3], tit='Filtered', new_fig=False )
-        plt.tight_layout() 
+    if plot:
+        plta(array, sbplt=[1, 3, 1], tit='Original')
+        plta(trend, vmin, vmax, sbplt=[1, 3, 2], tit='Trend', new_fig=False)
+        plta(ar_filt, vmin, vmax, sbplt=[1, 3, 3], tit='Filtered', new_fig=False)
 
     return ar_filt, trend
-
 
 # -----------------------------------------------------------------------------
 @njit( parallel=True )
@@ -1673,11 +1694,80 @@ def mlv_filter( array, filter_size, plot=False ) :
     return output_array
 
 # -----------------------------------------------------------------------------
-def terracing( array, padw=0, pmode='linear_ramp', remove='mean', order=[1], 
-               alpha=0, mask=None, nodata=True, plot=False, vmin=None, vmax=None, 
-               filt=False, ftype='hanning', iter=1, fradius=1, fiter=1,
-               pfilt=True,  pfsigma=1, pfradius=1,
-               threshold=0, nanfill='gdal' ) :  
+def terracing( array, 
+               padw=0, 
+               pmode='linear_ramp', 
+               remove='mean', 
+               order=[1], 
+               alpha=0, 
+               mask=None, 
+               nodata=True, 
+               plot=False, 
+               vmin=None, 
+               vmax=None, 
+               filt=True, 
+               ftype='median', 
+               iter=1, 
+               fradius=1, 
+               fiter=1,
+               pfilt=True, 
+               pfradius=1,
+               pfiter=[ 1, 3 ],
+               pftype=['gauss', 'hanning'],
+               nanfill='gdal',
+               zoom=None ) :  
+    
+    """
+    Apply terracing operator to an input array.
+
+    Parameters:
+    - array: numpy.ndarray
+        Input array.
+    - padw: int, optional
+        Width of padding. Default is 0.
+    - pmode: str, optional
+        Padding mode. Default is 'linear_ramp'.
+    - remove: str or None, optional
+        Method to remove trend from the array. Default is 'mean'.
+    - order: list of int, optional
+        Order of polynomial fit for trend removal. Default is [1].
+    - alpha: float, optional
+        Alpha value for padding. Default is 0.
+    - mask: numpy.ndarray or None, optional
+        Mask array. Default is None.
+    - nodata: bool, optional
+        Flag to indicate whether to assign NaN to nodata values. Default is True.
+    - plot: bool, optional
+        Flag to indicate whether to plot the original and terraced arrays. Default is False.
+    - vmin: float or None, optional
+        Minimum value for plotting. Default is None.
+    - vmax: float or None, optional
+        Maximum value for plotting. Default is None.
+    - filt: bool, optional
+        Flag to indicate whether to apply filtering to the terraced array. Default is False.
+    - ftype: str, optional
+        Type of filter to apply. Default is 'hanning'.
+    - iter: int, optional
+        Number of iterations for the terracing operator. Default is 1.
+    - fradius: int, optional
+        Radius for filtering. Default is 1.
+    - fiter: int, optional
+        Number of iterations for filtering. Default is 1.
+    - pfilt: bool, optional
+        Flag to indicate whether to apply additional filtering during iterations. Default is True.
+    - pfsigma: float, optional
+        Sigma value for additional filtering. Default is 0.5.
+    - pfradius: int, optional
+        Radius for additional filtering. Default is 2.
+    - nanfill: str or None, optional
+        Method to fill NaN values. Default is 'gdal'.
+    - zoom: float or None, optional
+        Zoom factor for resampling. Default is None.
+
+    Returns:
+    - terr: numpy.ndarray
+        Terraced array.
+    """
 
     array = np.copy( array )
     nan = np.isnan( array )
@@ -1695,38 +1785,63 @@ def terracing( array, padw=0, pmode='linear_ramp', remove='mean', order=[1],
         arrayr = utl.fillnan(arrayr, method=nanfill)
     
     terr_pad, pad_shape = utl.pad_array( arrayr, padw, pmode, alpha=alpha )
-    
+
+    # Laplacian kernel 3x3
+    lap_kernel = np.array( [ [  1,  1,  1 ],
+                             [  1, -8,  1 ],
+                             [  1,  1,  1 ] ] )
+
     for i in range( iter ) :
 
-        if pfilt is True :
-            terr_pad = utl.sp.ndimage.gaussian_filter( terr_pad, 
-                                                       sigma=pfsigma, 
-                                                       radius=pfradius )
+        if ( zoom is not None ) and ( zoom != 1 ) :
+            terr_pad = utl.resampling( terr_pad, zoom, 
+                                       prefilter=True, spl_order=1 )
 
-        pad_lap = utl.sp.ndimage.laplace( terr_pad, mode='nearest' ) 
-        pad_min = utl.sp.ndimage.minimum_filter( terr_pad, 3, 
-                                                 mode='nearest' )
-        pad_max = utl.sp.ndimage.maximum_filter( terr_pad, 3, 
-                                                 mode='nearest' )
-        pad_mean = utl.sp.ndimage.uniform_filter( terr_pad, 3, 
-                                                  mode='nearest' )
-        pad_std = utl.sp.ndimage.generic_filter(terr_pad, np.std, 3, 
-                                                  mode='nearest' )
-        idx_min = pad_lap < 0  
-        idx_max = pad_lap > 0 
+        if pfilt is True :
+            terr_pad = utl.filt2d( terr_pad, 
+                                   ftype=pftype,
+                                   radius=pfradius, 
+                                   iter=pfiter )
         
-        # terr_pad[ idx_min ] = pad_max[ idx_min  ]
-        # terr_pad[ idx_max ] = pad_min[ idx_max  ]
-        terr_pad[ idx_min ] = pad_mean[ idx_min  ] + pad_std[ idx_min  ]
-        terr_pad[ idx_max ] = pad_mean[ idx_max  ] - pad_std[ idx_max  ]
-    
+        # Create shifted grids
+        terr_pad_shift_lst = shift2Darray( terr_pad )[0]
+        pad_lap_shift_lst = []
+        pad_min_shift_lst = []
+        pad_max_shift_lst = []
+
+        # Crete staggred grids
+        for ti in terr_pad_shift_lst :
+            lap_i = utl.sp.ndimage.convolve( ti, lap_kernel )
+            min_i = utl.sp.ndimage.minimum_filter( ti, 3, mode='nearest' )
+            max_i = utl.sp.ndimage.maximum_filter( ti, 3, mode='nearest' )
+            pad_lap_shift_lst.append( lap_i )
+            pad_min_shift_lst.append( min_i )
+            pad_max_shift_lst.append( max_i )
+        
+        # Average the staggered grids
+        pad_lap = np.mean( np.stack( pad_lap_shift_lst ), axis=0 )
+        pad_min = np.mean( np.stack( pad_min_shift_lst ), axis=0 )
+        pad_max = np.mean( np.stack( pad_max_shift_lst ), axis=0 )
+
+        idx_mi0 = pad_lap < 0
+        idx_ma0 = pad_lap > 0
+
+        terr_pad[ idx_mi0 ] = pad_max[ idx_mi0 ]
+        terr_pad[ idx_ma0 ] = pad_min[ idx_ma0 ]
+        
+        if ( zoom is not None ) and\
+           ( zoom != 1 ) :
+            terr_pad = utl.resampling( terr_pad, 1/zoom, 
+                                       prefilter=False, 
+                                       spl_order=1 )
+
     terr = utl.crop_pad( terr_pad, pad_shape )
 
-    idx = np.abs( terr_pad ) < threshold
-    terr_pad[ idx ] = 0
-    
     if filt is True :
-        terr = utl.filt2d( terr, ftype=ftype, iter=fiter, radius=fradius )
+        terr = utl.filt2d( terr, 
+                           ftype=ftype, 
+                           iter=fiter, 
+                           radius=fradius )
     
     if nodata is True :
         terr[nan] = np.nan
@@ -1977,3 +2092,51 @@ def reduce_to_pole( array, sx, sy, inc, dec, sinc=None, sdec=None,
                   tit='Differences', new_fig=False )
 
     return rtp_array
+
+# -----------------------------------------------
+def shift2Darray( array, factor=1 ) :
+
+    # List to store the original and shifted grids
+    grids = [ array ]
+    
+    # Define the half cell size
+    half_cell = 0.5 * factor
+    
+    # Define the possible shifts (in terms of half cell size)
+    shifts = [
+        (half_cell, 0), (-half_cell, 0),  # Right, Left
+        (0, half_cell), (0, -half_cell),  # Down, Up
+        (half_cell, half_cell), (half_cell, -half_cell),  # Down-Right, Up-Right
+        (-half_cell, half_cell), (-half_cell, -half_cell)  # Down-Left, Up-Left
+        ]
+    
+    # Lists to store shifted x and y coordinates
+    x_shifted_coords = []
+    y_shifted_coords = []
+    
+    # Apply each shift and interpolate the grid
+    for shift_val in shifts:
+        shifted_grid = utl.sp.ndimage.shift( array, 
+                                             shift_val, 
+                                             order=1,
+                                             mode='nearest' )
+        
+        grids.append( shifted_grid )
+
+        # Calculate shifted coordinates
+        x_shift, y_shift = shift_val
+        x_coords, y_coords = np.meshgrid( np.arange(array.shape[1] ), 
+                                          np.arange(array.shape[0] ) )
+        x_shifted = x_coords + x_shift
+        y_shifted = y_coords + y_shift
+        
+        x_shifted_coords.append(x_shifted)
+        y_shifted_coords.append(y_shifted)
+    
+    return grids, x_shifted_coords, y_shifted_coords
+
+
+# -----------------------------------------------------------------------------
+
+# def remove_small_imperfections(image, size_threshold):
+

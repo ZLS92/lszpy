@@ -820,10 +820,10 @@ def st_loop(constant_arg, iterable_arg):
     if R3 != None :
         pr2, pr3 = mesh_R3( pr2, R3 )     
     
-    # Coordinates of computational point (center of the mesh)       
+    # Coordinates of computational point (center of the mesh) 
     st = [0, 0, z]
     
-    # Calculate z_gravity of prisms at station point (st) ---------------------   
+    # Calculate z_gravity of prisms at station point (st) ---------------------
     
     prjcode_m = f'+proj=ortho +lon_0=0 +lat_0=0 +ellps=sphere +R={R}'
     

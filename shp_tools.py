@@ -23,7 +23,7 @@ OGRTypes = { int: ogr.OFTInteger, str: ogr.OFTString, float: ogr.OFTReal,
 
 # -----------------------------------------------------------------------------
 def write_points( x, y, fields=None, name='points_shp', path=None, prj_code=4326, 
-                  kml=True, csv=True, write_xy=True ): 
+                  kml=True, csv=True, write_xy=True, dir_suffix='shp' ): 
     """
     Function to crete a .shp file of points given the points coordinates
     
@@ -45,13 +45,13 @@ def write_points( x, y, fields=None, name='points_shp', path=None, prj_code=4326
     driver = ogr.GetDriverByName("ESRI Shapefile")
     
     if path is None: 
-        shp_ = name
+        path = name
     else: 
-        shp_ = path + os.sep + name 
+        path = path + os.sep + name + '_' + dir_suffix
 
-    pt_nmS = shp_ + os.sep + name + '.shp'   
-    
-    os.makedirs(shp_, exist_ok=True)  
+    os.makedirs( path, exist_ok=True )
+
+    pt_nmS = path + os.sep + name + '.shp'
 
     while True:
         try:             
@@ -77,7 +77,7 @@ def write_points( x, y, fields=None, name='points_shp', path=None, prj_code=4326
             if fields is not None:
                 for f in fields: 
                     Field = ogr.FieldDefn(f, OGRTypes[type(fields[f][0]).__name__]) 
-                    point.CreateField(Field)         
+                    point.CreateField(Field)
             # Create the feature and set values
             featureDefn = point.GetLayerDefn()
             feature = ogr.Feature(featureDefn)
@@ -92,19 +92,19 @@ def write_points( x, y, fields=None, name='points_shp', path=None, prj_code=4326
                 if fields is not None:
                     for f in fields:
                        feature.SetField(f, fields[f][n])
-                point.CreateFeature(feature)             
+                point.CreateFeature(feature)
 
             del point_data_source 
 
             if kml==True: # Save as kml in the same folder
-                points_kml = gdal.VectorTranslate(shp_ + os.sep + name + '.kml' ,pt_nmS, format='KML')
+                points_kml = gdal.VectorTranslate(path + os.sep + name + '.kml' ,pt_nmS, format='KML')
                 del points_kml
 
             if csv == True :
 
                 fields['shp_x'] = x
                 fields['shp_y'] = y
-                utl.dict2csv( fields, path_name=shp_ + os.sep + name + '.csv'  )
+                utl.dict2csv( fields, path_name=path + os.sep + name + '.csv'  )
 
             return pt_nmS  
         
@@ -284,63 +284,111 @@ def lim2ring(lim, prj_in=4326, prj_out=4326):
     return ring    
 
 # -----------------------------------------------------------------------------
-def plot_ply( shp_ply, facecolor='r', edgecolor='k', lim=None,
-              plot=True, new_fig=False, ax=None, 
-              prjcode_out=4326, prjcode_in=None, alpha=0 ):
+def get_ply( shp_ply, lim=None, plot=True ):
     
-    # Extract first layer of features from shapefile using OGR
-    
-    if prjcode_in is None :
-        prjcode_in = shp_prjcode( shp_ply, p=False ) 
-
     if lim is not None :
         shp_ply = translate( shp_ply, new_name=None, new_path='/vsimem/', 
                              suffix='_cut' , extension='shp', lim=lim )
 
     ds = ogr.Open( shp_ply )
     lyr = ds.GetLayer(0)
-    
+
     plyco = []
     lyr.ResetReading()
+    xply = []
+    yply = []
+    fply = []
+    fply = []
+    nply = []
+
+    for fi, feat in enumerate(lyr):
+        geom = feat.GetGeometryRef()
+        if geom.GetGeometryName() == 'MULTIPOLYGON':
+            for i in range(geom.GetGeometryCount()):
+                sub_geom = geom.GetGeometryRef(i)
+                plyco.append(extract_polygon_coordinates(sub_geom))
+                for ni, _ in enumerate( plyco[-1][0] ):
+                    xply.append( plyco[-1][0][ni])
+                    yply.append(plyco[-1][1][ni])
+                    nply.append(ni)
+                    fply.append(fi)
+        else:
+            plyco.append(extract_polygon_coordinates(geom))
+            i = 0
+            for ni, _ in enumerate( plyco[-1][0] ):
+                xply.append( plyco[-1][0][ni])
+                yply.append(plyco[-1][1][ni])
+                nply.append(ni)
+                fply.append(fi)
+
+    np_ply = np.column_stack((xply, yply, fply, nply))
     
+    return np_ply
+
+# -----------------------------------------------------------------------------
+def extract_polygon_coordinates(geom) :
+
+    codes = []
+    all_x = []
+    all_y = []
+
+    for i in range( geom.GetGeometryCount() ):
+        ref = geom.GetGeometryRef( i )
+        x = [ ref.GetX(j) for j in range( ref.GetPointCount() ) ]
+        y = [ ref.GetY(j) for j in range( ref.GetPointCount() ) ]
+        codes += [ mpath.Path.MOVETO ] + ( len(x) - 1 ) * [ mpath.Path.LINETO ]
+        all_x += x
+        all_y += y
+
+    return [all_x, all_y]
+
+# -----------------------------------------------------------------------------
+def get_lin(shp_lin, lim=None, plot=True):
+
+    ogr.UseExceptions()
+    gdal.SetConfigOption('SHAPE_ENCODING', "UTF-8")
+    
+    if lim is not None :
+        shp_lin = translate( shp_lin, new_name=None, new_path='/vsimem/', 
+                             suffix='_cut' , extension='shp', lim=lim )
+        
+    ds = ogr.Open(shp_lin)
+    lyr = ds.GetLayer(0)
+
+    linco = []
+    lyr.ResetReading()
+
     for feat in lyr:
         geom = feat.GetGeometryRef()
-        codes = []
-        all_x = []
-        all_y = []
-        
-        for i in range(geom.GetGeometryCount()):
-            # Read ring geometry and create path
-            ref = geom.GetGeometryRef(i)
-            x = [ref.GetX(j) for j in range(ref.GetPointCount())]
-            y = [ref.GetY(j) for j in range(ref.GetPointCount())]
-            # skip boundary between individual rings
-            codes += [mpath.Path.MOVETO] + (len(x)-1)*[mpath.Path.LINETO]                    
-            all_x += x
-            all_y += y
-        # path = mpath.Path(np.column_stack((all_x,all_y)), codes)
-        # paths.append( path )
-        plyco.append( [ x, y ] )
+        if geom.GetGeometryName() == 'MULTILINESTRING':
+            for i in range(geom.GetGeometryCount()):
+                sub_geom = geom.GetGeometryRef(i)
+                coord = extract_linestring_coordinates( sub_geom )
+                coord[0] = np.array( coord[0], dtype=float )
+                coord[1] = np.array( coord[1], dtype=float )
+                linco.append( coord )
+        else:
+            coord = extract_linestring_coordinates( geom )
+            coord[0] = np.array( coord[0], dtype=float )
+            coord[1] = np.array( coord[1], dtype=float )
+            linco.append( coord )
 
-        if prjcode_in != prjcode_out :
-            x, y = utl.prjxy( prjcode_in, prjcode_out, x, y )
-            plyco[-1] = [ x, y ]
-        
-        # Add paths as patches to axes
-        if plot is True :
-            if new_fig is True :
-                plt.figure()
-            for ply in plyco:
-                if ax is None :
-                    ax = plt.gca() 
-                if facecolor is not None :
-                    ax.fill(ply[0], ply[1], color=facecolor, alpha=alpha )
-                ax.plot( ply[0], ply[1], color=edgecolor ) 
-                plt.show()
-        
-        ds = None
-        
-        return ply
+    if plot is True :
+        for lin in linco:
+            plt.gca().plot( lin[0], lin[1], c='k' ) 
+
+    gdal.SetConfigOption('SHAPE_ENCODING', None)
+    ds = None
+
+    return linco
+
+# -----------------------------------------------------------------------------
+def extract_linestring_coordinates(geom):
+    
+    x = [ geom.GetX(i) for i in range(geom.GetPointCount()) ]
+    y = [ geom.GetY(i) for i in range(geom.GetPointCount()) ]
+    
+    return [ x, y ]
 
 # -----------------------------------------------------------------------------
 def ogr2ogr(in_shp, arguments, new_name=None, new_path='/vsimem/', suffix='', extension='shp'):

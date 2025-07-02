@@ -14,8 +14,7 @@ s = os.sep
 import numpy as np
 import scipy as sp
 import scipy.ndimage as ndimage
-import tempfile
-from osgeo import gdal, ogr, osr, gdal_array, gdalnumeric, gdalconst
+from osgeo import gdal, ogr, osr, gdal_array
 import matplotlib.pyplot as plt
 from copy import copy
 import time
@@ -682,7 +681,6 @@ def raster_warp( raster,
                  extension = 'vrt',
                  method = gdal.GRA_Average,
                  cutlineDSName = None,
-                 cropToCutline = False,
                  tps = False,
                  rpc = False,
                  geoloc = False,
@@ -775,7 +773,7 @@ def raster_warp( raster,
 
     # Plot
     if plot==True:
-        pltr(raster0, vmin=vmin, vmax=vmax)
+        pltr( raster0, vmin=vmin, vmax=vmax )
 
     if return_array is True :
         array = []
@@ -783,11 +781,11 @@ def raster_warp( raster,
             array.append( raster0.GetRasterBand(b).ReadAsArray() )
         if len(array) == 1 :
             array = array[0]
-        gdal.Unlink( raster0.GetDescription() )
         raster0 = None
         return array
 
     if close == True:
+        raster0.FlushCache()
         raster0 = None
         return dest_path_name
 
@@ -795,9 +793,15 @@ def raster_warp( raster,
         return raster0
 
 # -----------------------------------------------------------------------------
-def warp2ref( raster, raster_ref, method=gdal.GRA_Bilinear, 
-              new_name=None, new_path='/vsimem/', extension='vrt', close=True,
-              plot=False, vmin=None, vmax=None, epsg=False) :
+def warp2ref( raster, raster_ref, 
+              method=gdal.GRA_Bilinear, 
+              new_name=None, 
+              new_path='/vsimem/', 
+              extension='vrt', 
+              close=False,
+              plot=False, 
+              vmin=None, vmax=None, 
+              epsg=False ) :
     
     if type(raster) == str:
         raster = gdal.Open(raster)
@@ -827,7 +831,6 @@ def warp2ref( raster, raster_ref, method=gdal.GRA_Bilinear,
     
     if close is True :
         path_name = raster.GetDescription()
-        gdal.Unlink( path_name )
         raster = None
         raster = path_name
         
@@ -946,7 +949,7 @@ def array2raster( array, lonmin=0, latmax=0, rx=1, ry=1, reference_raster=None,
         else :
             zz = utl.resampling( array, factor ) 
             rx = rx / factor
-            ry = ry / factor                                     
+            ry = ry / factor
     
     zz_new = np.copy( zz )
     zz_new[ np.isnan(zz) ] = nodata
@@ -1667,7 +1670,7 @@ def raster_write( raster, array, band=1,
                   new_name = 'copy',
                   extension = 'tif',
                   suffix = '',
-                  path = None,                  
+                  path = None,
                   close = False, 
                   plot = False, vmin = None, vmax = None ) :
     
@@ -1705,7 +1708,6 @@ def raster_fill( raster,
                  maxSearchDist=100, 
                  smoothingIterations=3, 
                  copy=False, 
-                 new_name=None, 
                  close=True, 
                  band=1, 
                  out='raster', 
@@ -1787,7 +1789,6 @@ def rasterize( raster,
                close=False, 
                copy=True, 
                new_name=None,
-               suffix='_msk', 
                inverse=False, 
                nodata=9999 , 
                plot=False, 
@@ -1807,7 +1808,7 @@ def rasterize( raster,
         raster = driver.CreateCopy('', raster )
 
     if nodata is None :
-        nodata = raster_nodata( raster )       
+        nodata = raster_nodata( raster )
     
     mask = raster_mask( raster, shp_ply, path_name=None, plot=False )
     mask_array = mask.GetRasterBand(1).ReadAsArray()
@@ -1828,7 +1829,7 @@ def rasterize( raster,
     if plot is True :
         pltr(raster, vmin=vmin, vmax=vmax)
 
-    if close is True :
+    if ( close is True ) and ( copy is False ) :
         path_name = raster.GetDescription()
         raster = None
         raster = path_name
@@ -1888,11 +1889,12 @@ def replace_nan( raster, new_value, suffix='_nan', path='',
     # Get the raster band
     src_band = raster.GetRasterBand(1)
 
-    # Get raster name
     if driver != 'MEM':
         path = raster_path(raster)
     else:
         path = path + os.sep
+
+    # Get raster name
     name = raster_name(raster)
     extension = raster_extension(raster)
 
@@ -1929,13 +1931,10 @@ def replace_nan( raster, new_value, suffix='_nan', path='',
 
             # Write the block back to the destination raster
             dst_band.WriteArray( data, x, y )
-    
-    # # Flush the destination raster to disk
-    # dst_band.FlushCache()
 
-    # # Close the datasets
-    # if close is True:
-    #     dst_ds = None
+    # Close the datasets
+    if ( close is True ) and ( driver != 'MEM' ):
+        dst_ds = None
 
     # Plot the output raster
     print( dst_band.GetDescription() )
@@ -1966,12 +1965,12 @@ def merge( raster_list,
            final_res = None,
            maxSearchDist = 100,
            smoothingIterations = 3,
-           close = True, 
+           close = True,
            save_all = False,
-           chunk_size = 1e7, 
+           chunk_size = 1e7,
            round_lim = False ) :
-    
-    path = path + os.sep + name 
+
+    path = path + os.sep + name
     os.makedirs( path, exist_ok=True )
 
     if save_all is True :
@@ -1979,30 +1978,30 @@ def merge( raster_list,
         os.makedirs( input_path, exist_ok=True )
 
     if os.path.exists( path + os.sep + name + '.' + extension ) :
-        os.remove( path + os.sep + name + '.' + extension ) 
+        os.remove( path + os.sep + name + '.' + extension )
 
     if round_lim is True :
-        lim = [ int(lim[0] // min_res) * min_res, 
-                int(lim[1] // min_res) * min_res, 
-                int(lim[2] // min_res) * min_res, 
+        lim = [ int(lim[0] // min_res) * min_res,
+                int(lim[1] // min_res) * min_res,
+                int(lim[2] // min_res) * min_res,
                 int(lim[3] // min_res) * min_res ]
-        
-    print("\nSorting raster files ...")
-    lst_out = raster_sort( raster_list, 
-                           lim = lim, 
-                           min_res = min_res, 
-                           nodata = nodata,
-                           prjcode = prjcode, 
-                           lim_prjcode = lim_prjcode, 
-                           int_attribute = int_attribute,
-                           downsampling = downsampling,
-                           crop2lim = True,
-                           extension = 'vrt',
-                           output = 'all', 
-                           printf=False )
-    
+
+    print("\n\tSorting raster files ...")
+    lst_rs_sort = raster_sort( raster_list,
+                               lim = lim,
+                               min_res = min_res,
+                               nodata = nodata,
+                               prjcode = prjcode,
+                               lim_prjcode = lim_prjcode,
+                               int_attribute = int_attribute,
+                               downsampling = downsampling,
+                               crop2lim = True,
+                               extension = 'vrt',
+                               output = 'all',
+                               printf=False )
+
     # Loop over the rasters in lst_out
-    for i, r in enumerate( lst_out ):
+    for i, r in enumerate( lst_rs_sort ):
         # Get the original resolution
         raster = r[0]
         gt = raster.GetGeoTransform()
@@ -2010,77 +2009,84 @@ def merge( raster_list,
         orig_res_y = np.abs( gt[5] )  # gt[5] is typically negative
 
         # Calculate the desired resolution
-        desired_res_x = round(orig_res_x / min_res) * min_res
-        desired_res_y = round(orig_res_y / min_res) * min_res
+        desired_res_x = round( orig_res_x / min_res ) * min_res
+        desired_res_y = round( orig_res_y / min_res ) * min_res
 
         # Resample the raster to the desired resolution
-        resampled_raster = gdal.Warp( raster_name(r[0])[:-2], raster, format='MEM', 
+        resampled_raster = gdal.Warp( raster_name(r[0])[:-2], 
+                                      raster, 
+                                      format='MEM', 
                                       xRes=desired_res_x, 
                                       yRes=desired_res_y, 
                                       resampleAlg=gdal.GRA_Average )
 
         # Replace the original raster with the resampled raster in lst_out
-        lst_out[i][0] = resampled_raster
+        lst_rs_sort[i][0] = resampled_raster
 
     raster1 = []
     raster0 = []
     res_1 = []
     res_0 = []
 
-    for i, r in enumerate( lst_out ) :
+    for i, r in enumerate( lst_rs_sort ) :
 
         if r[2] == 1 :
             raster1.append( r[0] )
             res_1.append( r[1] )
-            print( '(1) ', raster_name(r[0]), 
+            print( '\t(1) ', raster_name(r[0]),
                    raster_res( r[0] ), raster_shape(r[0]) )
 
         if r[2] == 0 :
-            raster0.append( r[0] ) 
+            raster0.append( r[0] )
             res_0.append( r[1] )
-            print( '(0) ', raster_name(r[0]), 
+            print( '\t(0) ', raster_name(r[0]),
                    raster_res( r[0] ), raster_shape(r[0]) )
 
         if save_all is True :
-            driver = gdal.GetDriverByName('GTiff')
-            _ = driver.CreateCopy( input_path + os.sep + raster_name(r[0]) + '.'+ extension, 
-                                   r[0], strict=0 )
+            driver = gdal.GetDriverByName( 'GTiff' )
+            _ = driver.CreateCopy( input_path + os.sep + raster_name(r[0]) +\
+                                   '.'+ extension, r[0], strict=0 )
 
     if raster0 != [] :
-        
-        print ( "\nMerge rasters with id code 0 ...")
-        
+
+        print ( "\n\tMerge rasters with id code 0 ..." )
+
         if np.size ( raster0 ) > 1 :
 
             for i, ri in enumerate( raster0 ) :
-                print( raster_name(ri)[:-2] )
+
+                print( '\t' + raster_name( ri )[:-2] )
+
                 if i == 0 :
-                    ra = raster0[i]
+                    # ra = raster0[i]
+                    ra = gdal.Translate('', raster0[i], format='MEM')
+                    raster0[i] = None
                     continue
 
                 rb = raster0[i]
-                
-                print( raster_lim( ra ), raster_lim( rb ) )
+
                 if raster_mem_space( ra, out='points' ) > chunk_size :
                     num_subset = int( raster_mem_space( ra, out='points' ) / chunk_size )
                 else :
                     num_subset = 1
 
-                ra_lim = raster_lim( rb )
+                ra_lim = raster_lim( ra )
+                original_bbox = [ ra_lim[0], ra_lim[2], ra_lim[1], ra_lim[3] ]
 
-                min_x = ra_lim[0]
-                min_y = ra_lim[2]
-                max_x = ra_lim[1]
-                max_y = ra_lim[3]
+                if num_subset > 1 :
 
-                xsubset_len = ( max_x - min_x ) / num_subset
-                xsubset_len = round(xsubset_len / min_res) * min_res
-                ysubset_len = ( max_y - min_y ) / num_subset
-                ysubset_len = round(ysubset_len / min_res) * min_res
+                    min_x = ra_lim[0]
+                    min_y = ra_lim[2]
+                    max_x = ra_lim[1]
+                    max_y = ra_lim[3]
+                    x_chunks = np.linspace( min_x, max_x, num_subset )
+                    y_chunks = np.linspace( min_y, max_y, num_subset )
 
-                x_chunks = np.arange( min_x, max_x+1e-3, xsubset_len )
-                y_chunks = np.arange( min_y, max_y+1e-3, ysubset_len )
+                else :
 
+                    x_chunks = [ ra_lim[0], ra_lim[1] ]
+                    y_chunks = [ ra_lim[2], ra_lim[3] ]
+                
                 # Split the raster into subsets
                 subsets = []
                 for xi, x in enumerate( x_chunks ):
@@ -2091,7 +2097,8 @@ def merge( raster_list,
                             continue
 
                         # Define the bounding box for the subset
-                        # Convert the pixel/line coordinates to the spatial reference system of the raster
+                        # Convert the pixel/line coordinates 
+                        # to the spatial reference system of the raster
                         min_xs = x_chunks[xi-1]
                         min_ys = y_chunks[yi-1]
                         max_xs = x
@@ -2102,35 +2109,39 @@ def merge( raster_list,
                         bbox = [min_xs, min_ys, max_xs, max_ys]
 
                         # # Extend the bounding box 
-                        rshape = raster_shape( ra )
-                        extent_dist = [ int( ( ( max_xs-min_xs ) / min_res ) * ( 25/100 ) ) * min_res, 
-                                        int( ( ( max_ys-min_ys ) / min_res ) * ( 25/100 ) ) * min_res ]
+                        extent_dist = [ int( ( ( max_xs-min_xs ) / min_res ) *\
+                                             ( 25/100 ) ) * min_res, 
+                                        int( ( ( max_ys-min_ys ) / min_res ) *\
+                                             ( 25/100 ) ) * min_res ]
+
                         bbox_lim_e = utl.extend_lim( bbox_lim, extent_dist, method='distance' )
                         bbox_e = [ bbox_lim_e[0], bbox_lim_e[2], bbox_lim_e[1], bbox_lim_e[3] ]
 
                         # Crop the raster to the bounding box
                         driver = gdal.GetDriverByName('GTiff')
 
-                        subset_ra = gdal.Warp( '', ra, outputBounds=bbox_e, format='MEM', 
+                        subset_ra = gdal.Warp( 'suba', ra, outputBounds=bbox_e, format='MEM', 
                                                xRes=min_res, yRes=min_res,
                                                dstNodata=nodata, resampleAlg=gdal.GRA_Average )
                         
-                        subset_rb = gdal.Warp( '', rb, outputBounds=bbox_e, format='MEM', 
+                        subset_rb = gdal.Warp( 'subb', rb, outputBounds=bbox_e, format='MEM', 
                                                dstNodata=nodata, resampleAlg=gdal.GRA_Average )
-
+                        
                         arr_a = raster2array( subset_ra, nodata=np.nan )[2]
                         arr_b = raster2array( subset_rb, nodata=np.nan )[2]
 
-                        res_list = [ raster_res( ra, mean=True ), raster_res( rb, mean=True ) ]
-                        if ( sigmab == 1 ) and ( res_list[0] == res_list[1] ):
-                            sb = 4
-                        else :
-                            sb = 2
-                        arr_ab = utl.merge2Darrays( [ arr_a, arr_b ], 
-                                                    res_list = [ res_0[i-1], res_0[i] ],
-                                                    sigmab = sigmab )
-                        arr_ab[ np.isnan(arr_ab) ] = nodata
-                        
+                        if np.all( np.isnan(arr_a) ) :
+                            arr_ab = np.copy( arr_b )
+                        if np.all( np.isnan(arr_b) ) :
+                            arr_ab = np.copy( arr_a )
+                        if not np.all( np.isnan(arr_a) )\
+                            and not np.all( np.isnan(arr_b) ) :
+                            merge_res_list = [res_0[i-1], res_0[i]]
+                            arr_ab = utl.merge2Darrays( [arr_a, arr_b], 
+                                                        res_list=merge_res_list,
+                                                        sigmab=sigmab )
+                            arr_ab[np.isnan(arr_ab)] = nodata
+
                         # Convert the array back to a raster
                         driver = gdal.GetDriverByName('MEM')
                         out_raster = driver.CreateCopy('', subset_ra )
@@ -2138,44 +2149,52 @@ def merge( raster_list,
                         out_raster.SetProjection(subset_ra.GetProjection())
                         out_raster.GetRasterBand(1).WriteArray( arr_ab )
                         out_raster.GetRasterBand(1).SetNoDataValue( nodata )
-                        out_raster = gdal.Warp( '', out_raster, outputBounds=bbox, format='MEM' )
+                        out_raster = gdal.Warp( '', out_raster, outputBounds=bbox, 
+                                                format='MEM' )
 
                         subsets.append( out_raster )
                         del arr_a, arr_b, arr_ab
+
+                    ds = None
+
+                ra = gdal.Warp( '', subsets, format='MEM', 
+                                resampleAlg=gdal.GRA_Bilinear, 
+                                outputBounds=original_bbox )
                 
-                ra = gdal.BuildVRT( '', subsets )
                 subset_ra = None
                 subset_rb = None
                 raster0[i] = None
-
+                              
         else :
-            print( raster_name(raster0[0])[:-2] )
+            print( raster_name( raster0[0] )[:-2] )
             ra = raster_warp( raster0[0], 
                               out_prjcode = prjcode,
                               xRes=min_res, yRes=min_res, 
                               dstNodata=nodata, 
                               method=gdal.GRA_Average )
-
+    
         r0 = gdal.Translate('', ra, format='MEM')
-        driver = gdal.GetDriverByName('GTiff')
-        r0 = driver.CreateCopy( path +s+ name+'_0.'+extension, r0, strict=0 )
 
         # Delete the original raster
         ra = None
         rb = None
         out_raster = None
         subsets = None
-
+        
+        
     if raster1 != [] :
-        
-        print ( "\nMerge rasters with id code 1 ...")
-        
+
+        print ( "\n\tMerge rasters with id code 0 ..." )
+
         if np.size ( raster1 ) > 1 :
 
             for i, ri in enumerate( raster1 ) :
-                print( raster_name(ri)[:-2] )
+
+                print( '\t' + raster_name( ri )[:-2] )
+
                 if i == 0 :
-                    ra = raster1[i]
+                    ra = gdal.Translate('', raster1[i], format='MEM')
+                    raster1[i] = None
                     continue
 
                 rb = raster1[i]
@@ -2186,15 +2205,22 @@ def merge( raster_list,
                     num_subset = 1
 
                 ra_lim = raster_lim( ra )
+                original_bbox = [ ra_lim[0], ra_lim[2], ra_lim[1], ra_lim[3] ]
 
-                min_x = ra_lim[0]
-                min_y = ra_lim[2]
-                max_x = ra_lim[1]
-                max_y = ra_lim[3]
+                if num_subset > 1 :
 
-                x_chunks = np.linspace( min_x, max_x, num_subset+1, endpoint=True )
-                y_chunks = np.linspace( min_y, max_y, num_subset+1, endpoint=True )
-
+                    min_x = ra_lim[0]
+                    min_y = ra_lim[2]
+                    max_x = ra_lim[1]
+                    max_y = ra_lim[3]
+                    x_chunks = np.linspace( min_x, max_x, num_subset )
+                    y_chunks = np.linspace( min_y, max_y, num_subset )
+                        
+                else :
+                    
+                    x_chunks = [ ra_lim[0], ra_lim[1] ]
+                    y_chunks = [ ra_lim[2], ra_lim[3] ]
+            
                 # Split the raster into subsets
                 subsets = []
                 for xi, x in enumerate( x_chunks ):
@@ -2203,53 +2229,85 @@ def merge( raster_list,
                     for yi, y in enumerate( y_chunks ):
                         if yi == 0:
                             continue
+
                         # Define the bounding box for the subset
-                        # Convert the pixel/line coordinates to the spatial reference system of the raster
+                        # Convert the pixel/line coordinates 
+                        # to the spatial reference system of the raster
                         min_xs = x_chunks[xi-1]
                         min_ys = y_chunks[yi-1]
                         max_xs = x
                         max_ys = y
 
                         # Define the bounding box for the subset
+                        bbox_lim = [min_xs, max_xs, min_ys, max_ys]
                         bbox = [min_xs, min_ys, max_xs, max_ys]
 
+                        # # Extend the bounding box 
+                        extent_dist = [ int( ( ( max_xs-min_xs ) / min_res ) *\
+                                             ( 25/100 ) ) * min_res, 
+                                        int( ( ( max_ys-min_ys ) / min_res ) *\
+                                             ( 25/100 ) ) * min_res ]
+
+                        bbox_lim_e = utl.extend_lim( bbox_lim, extent_dist, method='distance' )
+                        bbox_e = [ bbox_lim_e[0], bbox_lim_e[2], bbox_lim_e[1], bbox_lim_e[3] ]
+
                         # Crop the raster to the bounding box
-                        subset_ra = gdal.Warp('', ra, outputBounds=bbox, format='MEM')
-                        subset_rb = gdal.Warp('', rb, outputBounds=bbox, format='MEM')
+                        driver = gdal.GetDriverByName('GTiff')
+
+                        subset_ra = gdal.Warp( 'suba', ra, outputBounds=bbox_e, format='MEM', 
+                                               xRes=min_res, yRes=min_res,
+                                               dstNodata=nodata, resampleAlg=gdal.GRA_Average )
+                        
+                        subset_rb = gdal.Warp( 'subb', rb, outputBounds=bbox_e, format='MEM', 
+                                               dstNodata=nodata, resampleAlg=gdal.GRA_Average )
+                        
                         arr_a = raster2array( subset_ra, nodata=np.nan )[2]
                         arr_b = raster2array( subset_rb, nodata=np.nan )[2]
-                        arr_ab = utl.merge2Darrays( [ arr_a, arr_b ], 
-                                                 res_list = [ res_1[i-1], res_1[i] ],
-                                                 sigmab = sigmab )
+
+                        if np.all( np.isnan(arr_a) ) :
+                            arr_ab = np.copy( arr_b )
+                        if np.all( np.isnan(arr_b) ) :
+                            arr_ab = np.copy( arr_a )
+                        if not np.all( np.isnan(arr_a) )\
+                            and not np.all( np.isnan(arr_b) ) :
+                            merge_res_list = [res_1[i-1], res_1[i]]
+                            arr_ab = utl.merge2Darrays( [arr_a, arr_b], 
+                                                        res_list=merge_res_list,
+                                                        sigmab=sigmab )
+                            arr_ab[np.isnan(arr_ab)] = nodata
+
                         # Convert the array back to a raster
-                        arr_ab[ np.isnan(arr_ab) ] = nodata
-                        driver = gdal.GetDriverByName( 'MEM ')
-                        out_raster = gdal_array.OpenArray( arr_ab )
+                        driver = gdal.GetDriverByName('MEM')
+                        out_raster = driver.CreateCopy('', subset_ra )
                         out_raster.SetGeoTransform( subset_ra.GetGeoTransform() )
                         out_raster.SetProjection( subset_ra.GetProjection() )
+                        out_raster.GetRasterBand(1).WriteArray( arr_ab )
                         out_raster.GetRasterBand(1).SetNoDataValue( nodata )
-                        out_raster = gdal.Warp( '', out_raster, outputBounds=bbox, format='MEM' )
+                        out_raster = gdal.Warp( '', out_raster, outputBounds=bbox, 
+                                                format='MEM' )
 
-                        # Append the raster to the list of subsets
                         subsets.append( out_raster )
+                        del arr_a, arr_b, arr_ab
 
-                if len(subsets) > 1:
-                    ra = gdal.BuildVRT( '', subsets )
-                if len(subsets) == 1:
-                    ra = subsets[0]
+                    ds = None
 
-                pltr( ra )
+                ra = gdal.Warp( '', subsets, format='MEM', 
+                                resampleAlg=gdal.GRA_Bilinear, 
+                                outputBounds=original_bbox )
+                
                 subset_ra = None
                 subset_rb = None
                 raster1[i] = None
-                del arr_a, arr_b, arr_ab
-                
-        else :
-            ra = raster1[0]
 
+        else :
+            print( raster_name(raster1[0])[:-2] )
+            ra = raster_warp( raster1[0], 
+                              out_prjcode = prjcode,
+                              xRes=min_res, yRes=min_res, 
+                              dstNodata=nodata, 
+                              method=gdal.GRA_Average )
+    
         r1 = gdal.Translate('', ra, format='MEM')
-        driver = gdal.GetDriverByName('GTiff')
-        r1 = driver.CreateCopy( path+s+name+'_1.tif', r1, strict=0 )
 
         # Delete the original raster
         ra = None
@@ -2260,7 +2318,7 @@ def merge( raster_list,
     if shp_ply is not None : 
         
         if raster0 != [] :
-            print ( "\nMask rasters in shp polygon (i.e., rasters with id code 0) ...")
+            print ( "\n\tMask rasters in shp polygon (i.e., rasters with id code 0) ...")
             if fillnan1 :
                 r0 = raster_fill( r0, 
                                   maxSearchDist = maxSearchDist, 
@@ -2271,7 +2329,7 @@ def merge( raster_list,
             r0 = rasterize( r0, 
                             shp_ply, 
                             nodata=nodata,
-                            suffix='_msk' )  
+                            new_name=raster_name(r0) + '_mask.tif' )  
             
         if raster1 != [] :
             print ( "\nMask rasters out shp polygon (i.e., rasters with id code 1) ...")
@@ -2286,10 +2344,10 @@ def merge( raster_list,
                             shp_ply, 
                             inverse = True, 
                             nodata=nodata,
-                            suffix='_msk' ) 
+                            new_name=raster_name(r0) + '_mask.tif' ) 
       
     if (raster1 != []) and (raster0 != []) :
-        print ( "\nMerge rasters with id code 1 and 0 ...")
+        print ( "\n\tMerge rasters with id code 1 and 0 ...")
 
         if raster_mem_space( r1, out='points' ) > chunk_size :
             num_subset = int( raster_mem_space( r1, out='points' ) / chunk_size )
@@ -2376,7 +2434,7 @@ def merge( raster_list,
     raster_file = path + os.sep + name + '.' + extension
 
     if fillnan2 is True :
-        print ( "\nFilling remaining nodata val ...")
+        print ( "\n\tFilling remaining nodata val ...")
         band1 = r.GetRasterBand(1)
         band2 = r.GetRasterBand(2)
         band1.SetNoDataValue(nodata)
@@ -2394,7 +2452,7 @@ def merge( raster_list,
 
         
     if final_res != None :
-        print ( "\nResampling raster to final resolution ...")
+        print ( "\n\tResampling raster to final resolution ...")
         r = raster_warp( r, 
                          xRes = final_res, 
                          yRes = final_res, 
@@ -2420,7 +2478,7 @@ def merge( raster_list,
         r = None
         r = raster_file
 
-    print ( "\nMerge completed!" )
+    print ( "\n\tMerge completed!" )
 
     return r
 
@@ -2563,7 +2621,8 @@ def raster_mask( raster, shp_ply, path_name=None, plot=False, astype='raster') :
         return raster2array( raster_mask, nodata=0 )[2].astype(bool)
 
 # -----------------------------------------------------------------------------
-def mask_array( xx, yy, zz, shp_ply, prjcode=4326, plot=False, vmin=None, vmax=None ) :  
+def mask_array( xx, yy, zz, shp_ply, 
+                prjcode=4326, plot=False, vmin=None, vmax=None ) :  
 
     zz_new = np.copy( zz ) 
     raster = array2raster( ( xx, yy, zz_new ), prjcode=prjcode, close=False )

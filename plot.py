@@ -16,6 +16,7 @@ import numpy as np
 import matplotlib.image as mpimg
 import matplotlib.ticker as ticker
 import matplotlib.dates as mdates
+import matplotlib.colors as LinearSegmentedColormap
 
 
 utl = imp.load_source( 'module.name', mdir+os.sep+'utils.py' )
@@ -975,12 +976,13 @@ def static_slices( NpArr3d, xyz_start, xyz_end, nan2val=0,
                     i = np.array( i )
                 merge_colums[:,n] = i
             NpArr3d = np.copy( merge_colums )
-            
-        idx = (NpArr3d[:,0] >= xyz_lim[0]) & (NpArr3d[:,0] <= xyz_lim[1]) & \
-              (NpArr3d[:,1] >= xyz_lim[2]) & (NpArr3d[:,1] <= xyz_lim[3]) & \
-              (NpArr3d[:,2] >= xyz_lim[4]) & (NpArr3d[:,2] <= xyz_lim[5])
+
+        if xyz_lim is not None :
+            idx = (NpArr3d[:,0] >= xyz_lim[0]) & (NpArr3d[:,0] <= xyz_lim[1]) & \
+                (NpArr3d[:,1] >= xyz_lim[2]) & (NpArr3d[:,1] <= xyz_lim[3]) & \
+                (NpArr3d[:,2] >= xyz_lim[4]) & (NpArr3d[:,2] <= xyz_lim[5])
         
-        NpArr3d = NpArr3d[idx,:]          
+            NpArr3d = NpArr3d[idx,:]          
             
         xu = np.unique( NpArr3d[:,0] )
         yu = np.unique( NpArr3d[:,1] )
@@ -1070,13 +1072,13 @@ def static_slices( NpArr3d, xyz_start, xyz_end, nan2val=0,
         
     lim = utl.xy2lim( xt, zt )    
 
-    
     ax = plt.pcolormesh( xt, zt, yt, vmin=vmin, vmax=vmax, 
                     cmap='jet',  linewidth=linewidth, shading='auto', 
                     snap=True, rasterized=True )
     
     plt.xlabel( xlabel )
     plt.ylabel( ylabel )
+    plt.colorbar( ax, label='Amplitude' )
                                         
     return zt, xt, yt, ax
         
@@ -1178,3 +1180,360 @@ def plot_datetime_data( datetime_array, fp=[], window=1, units='D', resamp_facto
 
     # Show the plot
     plt.show()
+
+# -----------------------------------------------------------------------------
+def ortho_slices( xyzd,
+                  section=[0,None,None],
+                  lim=None, 
+                  vmin=None, 
+                  vmax=None, 
+                  figname='Model',
+                  grid_points=False, 
+                  grid_points_color='y',
+                  grid_points_size=1,
+                  cmap='jet',
+                  xlabel='',
+                  ylabel='',
+                  colorbar_label='',
+                  edgecolors='k',
+                  printf=True,
+                  aspect='auto',
+                  figsize=None,
+                  title='',
+                  multiple_models=False,
+                  suptitle=None,
+                  hspace=None,
+                  points=None,
+                  lines=None,
+                  units='',
+                  pcolor='k',
+                  psize=10,
+                  lcolor='k',
+                  lwidth=1, 
+                  zoom=None,
+                  adjust2lim=True,
+                  pad=0 ) :
+    """
+    Plot orthogonal slices of a 3D model.
+
+    Parameters:
+
+    - x (array-like): x-coordinates of the model grid points. Default is None.
+    - y (array-like): y-coordinates of the model grid points. Default is None.
+    - z (array-like): z-coordinates of the model grid points. Default is None.
+    - data (array-like): values of the model at each grid point.
+    - section (list, optional): Indices of the slices to plot. Default is [0, None, None].
+    - lim (list, optional): Limits of the model grid. Default is None.
+    - vmin (float, optional): Minimum value for the color scale. Default is None.
+    - vmax (float, optional): Maximum value for the color scale. Default is None.
+    - figname (str, optional): Title of the figure. Default is 'Model'.
+    - grid_points (bool, optional): Whether to plot the grid points. Default is False.
+    - grid_points_color (str, optional): Color of the grid points. Default is 'y'.
+    - grid_points_size (float, optional): Size of the grid points. Default is 1.
+    - cmap (str, optional): Colormap for the color scale. Default is 'jet'.
+    - xlabel (str, optional): Label for the x-axis. Default is ''.
+    - ylabel (str, optional): Label for the y-axis. Default is ''.
+    - colorbar_label (str, optional): Label for the colorbar. Default is ''.
+    - edgecolors (str, optional): Color of the grid lines. Default is 'k'.
+    - printf (bool, optional): Whether to print the grid dimensions. Default is True.
+    - aspect (str, optional): Aspect ratio of the plot. Default is 'auto'.
+    - figsize (tuple, optional): Size of the figure. Default is None.
+    - title (str, optional): Title of the plot. Default is None.
+
+    Returns:
+    - X_sect (ndarray): x-coordinates of the selected slice.
+    - Y_sect (ndarray): y-coordinates of the selected slice.
+    - V_sect (ndarray): values of the selected slice.
+    """
+
+    if multiple_models is False :
+        xyzd = [xyzd]
+
+    if points is not None :
+        if type( points ) in ( list, tuple ) :
+            if ( np.size( points )  == 3 ) and\
+               ( isinstance( points[0], np.ndarray ) ) :
+                points = [ points ]
+
+    plt.close( figname )
+    plt.figure( num=figname, figsize=figsize )
+    V_sect_list = []
+
+    for i, xyzdi in enumerate( xyzd ) :
+
+        x, y, z, data = xyzdi
+
+        if x is not None :
+            x = np.array( x ).ravel()
+        if y is not None:
+            y = np.array( y ).ravel()
+        if z is not None:
+            z = np.array( z ).ravel()
+
+        data = np.array( data ).ravel()
+
+        model = { 'x':x, 'y':y, 'z':z, 'p':data }
+
+        if lim is not None :
+            if len( lim ) < 5 :
+                idx = ( model['x'] >= lim[0] ) & ( model['x'] <= lim[1] ) &\
+                      ( model['y'] >= lim[2] ) & ( model['y'] <= lim[3] )
+            else :
+                idx = ( model['x'] >= lim[0] ) & ( model['x'] <= lim[1] ) &\
+                      ( model['y'] >= lim[2] ) & ( model['y'] <= lim[3] ) &\
+                      ( model['z'] >= lim[4] ) & ( model['z'] <= lim[5] )
+        else :
+            idx = np.ones( np.size( model['x'] ), dtype=bool )
+
+        xp = np.unique( model['x'][idx] )
+        yp = np.unique( model['y'][idx] )
+        zp = np.unique( model['z'][idx] )[::-1]
+
+        xstep = np.diff( xp )
+        ystep = np.diff( yp )
+        zstep = np.diff( zp )
+        nx = np.size( xp )
+        ny = np.size( yp )
+        nz = np.size( zp )
+
+        if printf is True :
+            print( f'Grid_dim : ny={ny}, nx={nx}, nz={nz}' )
+
+        if lim is None :
+            lim = [ xp.min()-xstep[0]/2, xp.max()+xstep[-1]/2, 
+                    yp.min()-ystep[0]/2, yp.max()+ystep[-1]/2, 
+                    zp.min()-zstep[0]/2 , zp.max()+zstep[-1]/2 ]
+
+        elif len( lim ) < 5 :
+            lim = [ lim[0], lim[1], lim[2], lim[3], 
+                    zp.min()-zstep[0]/2 , zp.max()+zstep[-1]/2  ]
+
+        if pad > 0 :
+            xp = np.insert( xp, 0, xp[0] - xstep[0]*pad )
+            xp = np.append( xp, xp[-1] + xstep[-1]*pad )
+            yp = np.insert( yp, 0, yp[0] - ystep[0]*pad )
+            yp = np.append( yp, yp[-1] + ystep[-1]*pad )
+            zp = np.insert( zp, 0, zp[0] - zstep[0]*pad )
+            zp = np.append( zp, zp[-1] + zstep[-1]*pad )
+            for si, seci in enumerate( section ) :
+                if seci is not None :
+                    section[si] = seci + pad
+
+        if adjust2lim is True :
+            if ( lim[0] <= xp.min() ) :
+                xp = np.insert( xp, 0, xp[0]-xstep[0] )
+            if ( lim[1] >= xp.max() ) :
+                xp = np.append( xp, xp[-1]+xstep[-1] )
+            if ( lim[2] <= yp.min() ) :
+                yp = np.insert( yp, 0, yp[0]-ystep[0] )
+            if ( lim[3] >= yp.max() ) :
+                yp = np.append( yp, yp[-1]+ystep[-1] )
+            if ( lim[4] <= zp.min() ) :
+                zp = np.insert( zp, 0, zp[0]-zstep[0] )
+            if ( lim[5] >= zp.max() ) :
+                zp = np.append( zp, zp[-1]+zstep[-1] )
+
+        xstep = np.insert(xstep, 0, xstep[0]) / 2
+        ystep = np.insert(ystep, 0, ystep[0]) / 2
+        zstep = np.insert(zstep, 0, zstep[0]) / 2
+
+        Xp, Yp, Zp = np.meshgrid( xp, yp, zp )
+        Vp = utl.sp.interpolate.griddata( ( model['x'], model['y'], model['z'] ),
+                                            model['p'], ( Xp, Yp, Zp ), method='nearest' )
+
+        if zoom is not None :
+
+            Xz = np.round( utl.sp.ndimage.zoom( Xp, zoom, order=1 ), 6 )
+            Yz = np.round( utl.sp.ndimage.zoom( Yp, zoom, order=1 ), 6 )
+            Zz = np.round( utl.sp.ndimage.zoom( Zp, zoom, order=1 ), 6 )
+            Vz = utl.sp.ndimage.zoom( Vp, zoom, order=1 )
+            Nanz = np.isnan(Vz)
+            edgecolors = 'none'
+
+        pline = []
+
+        if type( section ) == str :
+
+            if ( section == 'midy' ) :
+                section = [ None, int( ny / 2 ), None ]
+            if ( section == 'midx' ) :
+                section = [ int( nx / 2 ), None, None ]
+            if ( section == 'midz' )  :
+                section = [ None, None, int( int( nz / 2 ) / 2 ) ]
+        
+        # Z slices
+        if (section[0] is None) and (section[1] is None) :
+            X_sect = Xp[:,:,section[2]]
+            Y_sect = Yp[:,:,section[2]]
+            V_sect = Vp[:,:,section[2]]
+            unit_val = np.unique( Zp[:,:,section[2]] )
+            units = units + ' ' + 'Z'
+            step = np.sort( ( zp[section[2]]-zstep[section[2]], 
+                              zp[section[2]]+zstep[section[2]] ) )
+            xs = model['x']
+            ys = model['y']
+            if xlabel == '' :
+                xlabel = 'X'
+            if ylabel == '' :
+                ylabel = 'Y'
+            if lines is not None :
+                for line in lines :
+                    pline.append( [ line[0], line[1] ] )
+            if zoom is not None :
+                V_sect = utl.sp.interpolate.griddata( ( Xz[~Nanz], 
+                                                        Yz[~Nanz], 
+                                                        Zz[~Nanz] ), 
+                                                        Vz[~Nanz], 
+                                                     ( Xz[:,:,1], Yz[:,:,1], 
+                                                       np.full( Xz[:,:,1].shape, unit_val ) ),
+                                                     method='nearest' )
+                X_sect = Xz[:,:,1]
+                Y_sect = Yz[:,:,1]
+
+        # Y slices
+        elif (section[0] is None) and (section[2] is None) :
+
+            X_sect = Yp[:,section[1],:]
+            Y_sect = Zp[:,section[1],:]
+            V_sect = Vp[:,section[1],:]
+            unit_val = np.unique( Xp[:,section[1],:] )
+            units = units + ' ' + 'X'
+            step = np.sort( ( xp[section[1]]-xstep[section[1]], 
+                              xp[section[1]]+xstep[section[1]] ) )
+            xs = model['y']
+            ys = model['z']
+            if xlabel == '' :
+                xlabel = 'Y'
+            if ylabel == '' :
+                ylabel = 'Z'
+            if lines is not None :
+                for line in lines :
+                    if len( line ) > 2 :
+                        pline.append( [ line[1], line[2] ] )
+            if zoom is not None :
+                V_sect = utl.sp.interpolate.griddata( ( Xz[~Nanz], 
+                                                       Yz[~Nanz], 
+                                                       Zz[~Nanz] ), 
+                                                       Vz[~Nanz], 
+                                                     ( np.full( Yz[:,1,:].shape, unit_val ), 
+                                                       Yz[:,1,:], Zz[:,1,:] ),
+                                                     method='nearest' )
+                X_sect = Yz[:,1,:]
+                Y_sect = Zz[:,1,:]
+
+        # X slices
+        elif ( section[1]is None) and (section[2] is None ) :
+
+            X_sect = Xp[section[0],:,:]
+            Y_sect = Zp[section[0],:,:]
+            V_sect = Vp[section[0],:,:]
+            unit_val = float( np.unique( Yp[section[0],:,:] ) )
+            units = units + ' ' + 'Y'
+            step = np.sort( ( yp[section[0]]-ystep[section[0]], 
+                              yp[section[0]]+ystep[section[0]] ) )
+            xs = model['x']
+            ys = model['z']
+            if xlabel == '' :
+                xlabel = 'X'
+            if ylabel == '' :
+                ylabel = 'Z'
+            if lines is not None :
+                for line in lines :
+                    if len( line ) > 2 :
+                        pline.append( [ line[0], line[2] ] )
+            if zoom is not None :
+                V_sect = utl.sp.interpolate.griddata( ( Xz[~Nanz], 
+                                                       Yz[~Nanz], 
+                                                       Zz[~Nanz] ), 
+                                                       Vz[~Nanz], 
+                                                     ( Xz[1,:,:], np.full( Xz[1,:,:].shape, unit_val ) , 
+                                                       Zz[1,:,:] ),
+                                                     method='nearest' )
+                X_sect = Xz[1,:,:]
+                Y_sect = Zz[1,:,:]
+
+        else :
+            raise ValueError( 'section list must have exactly two None values,'+\
+                              'e.g., [0, None, None]')
+
+        plt.subplot( len( xyzd ), 1, i+1 )
+
+        if type( vmin ) in ( list, tuple ) :
+            ivmin = vmin[i]
+        else :
+            ivmin = vmin
+
+        if type( vmax ) in ( list, tuple ) :
+            ivmax = vmax[i]
+        else :
+            ivmax = vmax
+
+        pcmax = plt.pcolormesh( X_sect, Y_sect, V_sect, 
+                                cmap = cmap,
+                                edgecolors = edgecolors, 
+                                linewidth=0.01, 
+                                shading='auto',
+                                vmin = ivmin, 
+                                vmax = ivmax )
+
+        plt.gca().set_aspect( aspect )
+
+        plt.colorbar( pcmax, label=colorbar_label )
+        plt.xlabel( xlabel )
+        plt.ylabel( ylabel )
+
+        if grid_points is True :
+            plt.scatter( xs, ys, 
+                         c=grid_points_color, 
+                         s=grid_points_size, 
+                         label='grid_points')
+            plt.legend()
+
+        if len( pline ) > 0 :
+            for line in pline :
+                plt.plot( line[0], line[1], c=lcolor, lw=lwidth )
+
+        if points is not None :
+            pti = points[i]
+            if 'X' in units :
+                idx = ( pti[0] >= step[0] ) & ( pti[0] <= step[1]  )
+                plt.scatter( points[1][idx], points[2][idx], c=pcolor, s=psize, label='points' )
+            if 'Y' in units :
+                idx = ( pti[1] >= step[0] ) & ( pti[1] <= step[1])
+                plt.scatter( points[0][idx], points[2][idx], c=pcolor, s=psize, label='points' )
+            if 'Z' in units :
+                idx = ( pti[2] >= step[0] ) & ( pti[2] <= step[1] )
+                plt.scatter( points[0][idx], points[1][idx], c=pcolor, s=psize, label='points' )
+
+        if lim is not None :
+            if 'X' in units :
+                plt.xlim( ( lim[2], lim[3] ) )
+                plt.ylim( ( lim[4], lim[5] ) )
+            if 'Y' in units :
+                plt.xlim( ( lim[0], lim[1] ) )
+                plt.ylim( ( lim[4], lim[5] ) )
+            if 'Z' in units :
+                plt.xlim( ( lim[0], lim[1] ) )
+                plt.ylim( ( lim[2], lim[3] ) )
+        
+        if title is None :
+            ititle = f'Model {i}'
+            plt.title( ititle )
+
+        if type( title ) in ( list, tuple ) :
+            plt.title( title[i] )
+
+        V_sect_list.append( V_sect )
+        
+    plt.subplots_adjust( hspace=hspace )
+
+    if suptitle is None :
+        suptitle = f'Slice at {section} i.e., {float( unit_val )} {units}'
+    plt.suptitle( suptitle )
+
+    if len( V_sect_list ) == 1 :
+        V_sect = V_sect_list[0]
+    else :
+        V_sect = V_sect_list
+
+    return X_sect, Y_sect, V_sect

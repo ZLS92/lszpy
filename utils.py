@@ -12,23 +12,19 @@ import scipy as sp
 import platform
 from scipy import signal
 from matplotlib.widgets import LassoSelector
-import matplotlib.text as MPLtext
 from matplotlib.colors import LightSource, LinearSegmentedColormap
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 import itertools
 import random
 import matplotlib.pyplot as plt
 from matplotlib import cm
 import time 
 import copy
-import shapely 
-from shapely.geometry import LineString, MultiPoint, MultiLineString 
-import scipy.stats as sp_stat
 from matplotlib.path import Path
-from sklearn.decomposition import PCA
 import datetime
-from osgeo import gdal, gdalnumeric, osr
-import dask.array as da
+from osgeo import gdal
+import shapely 
+from shapely.geometry import LineString, Point, Polygon
+
 
 
 # -----------------------------------------------------------------------------
@@ -76,7 +72,7 @@ try:
 except ValueError:
     # If the colormap is not registered, register it
     wysiwyg = LinearSegmentedColormap.from_list("wysiwyg", wysiwyg_colors)
-    plt.cm.register_cmap(name='wysiwyg', cmap=wysiwyg)
+    plt.colormaps.register(name='wysiwyg', cmap=wysiwyg)
 # ---
 
 # ---
@@ -131,7 +127,7 @@ try:
 except ValueError:
     # If the colormap is not registered, register it
     cmy = LinearSegmentedColormap.from_list("cmy", cmy_colors)
-    plt.cm.register_cmap(name='cmy', cmap=cmy)
+    plt.colormaps.register(name='cmy', cmap=cmy)
 # ---
 
 # -----------------------------------------------------------------------------
@@ -558,9 +554,9 @@ def xy2XY( x, y, step=None, lim=None, dist='mean', method='distance', extend=Fal
         return X, Y
         
 # -----------------------------------------------------------------------------
-def xyz2xy( xyz, xy, method='nearest', algebra=None, 
+def xyz2xy( xyz, xy, method='nearest',
             rescale=False, fillnan=True,
-            plot=False, blkm='mean' ) :
+            plot=False, blkm='mean', smooth=0 ) :
 
     x, y, z = xyz
 
@@ -593,29 +589,68 @@ def xyz2xy( xyz, xy, method='nearest', algebra=None,
         x1, y1, z1 = block_m( x1, y1, z1, method=blkm, wind_size=min_dist_2 )
 
     if method == 'thin_plate':
-        # Compute Bivariate Spline representation of the data
-        xu, yu = np.unique(x1), np.unique(y1)
-        x_grid, y_grid = np.meshgrid(yu, xu)
-        z_grid = sp.interpolate.griddata((x1, y1), z1, (x_grid, y_grid), method='nearest')
+        input_memory = ( x1.nbytes + y1.nbytes +\
+                               z1.nbytes + x2.nbytes + y2.nbytes)
+        num_points = len(x1)
+        num_int_points = len(x2)
+        dist_matrix_mem = num_points * num_int_points * 8
+        weights_mem = num_points * 8  # Assuming 8 bytes per weight (float64)
+        coeff_mem = num_points * 8 
+        estimated_memory = input_memory + dist_matrix_mem + weights_mem + coeff_mem
+        total_memory =  4 * 1024**3
+        print( 'Estimated memory usage: ', estimated_memory )
+        print( 'Total memory: ', total_memory )
+        if estimated_memory < total_memory:
+            print( 'ok0' )
+            rbf = sp.interpolate.Rbf( x1, y1, z1, 
+                                      function=method, 
+                                      smooth=smooth )
+            zn = rbf.ev(x2, y2)
 
-        spl = sp.interpolate.RectBivariateSpline(x_grid[0], y_grid[:, 0], z_grid, kx=1, ky=1)
-
-        # Use this object to interpolate at new points
-        zn = spl.ev(x2, y2)
+        else :
+            # Start block computing
+            print( 'ok1' )
+            xy1 = np.column_stack( ( x1, y1 ) )
+            xy2 = np.column_stack( ( x2.ravel(), y2.ravel() ) )
+            xyu, idx = np.unique( np.vstack( ( xy1, xy2 ) ), axis=0, return_index=True )
+            X, Y = np.meshgrid( np.unique( xyu[:,0] ), np.unique( xyu[:,1] ) )
+            Z = np.concatenate( ( z1, np.nan * np.ones( x2.size ) ) )[ idx ].reshape( X.shape )
+            chunk_elements = int(total_memory / (Z.itemsize * 3)) 
+            chunk_size = int(np.sqrt(chunk_elements))
+            chunk_size =1000
+            for i in range(0, Z.shape[0], chunk_size):
+                for j in range( 0, Z.shape[1], chunk_size ):
+                    chunk = Z[i:i+chunk_size, j:j+chunk_size]
+                    X_chunk, Y_chunk = X[i:i+chunk_size, j:j+chunk_size],\
+                                       Y[i:i+chunk_size, j:j+chunk_size]
+                    valid_mask_chunk = ~np.isnan(chunk)
+                    x_valid_chunk = X_chunk[valid_mask_chunk]
+                    y_valid_chunk = Y_chunk[valid_mask_chunk]
+                    z_valid_chunk = chunk[valid_mask_chunk]
+                    if len(x_valid_chunk) > 0:
+                        rbf = sp.interpolate.Rbf( x_valid_chunk, y_valid_chunk, z_valid_chunk, 
+                                                  function=method, smooth=smooth)
+                        filled_chunk = rbf(X_chunk, Y_chunk)
+                        Z[i:i+chunk_size, j:j+chunk_size] = filled_chunk
+            zn = sp.interpolate.griddata( (X.ravel(), Y.ravel()), Z.ravel(), (x2, y2), 'nearest' )
 
     elif method == 'nearest' or np.size(x1) < 4:
-        zn = sp.interpolate.griddata((x1, y1), z1, (x2, y2), method='nearest', rescale=rescale)
-    
+        zn = sp.interpolate.griddata( (x1, y1), z1, (x2, y2), 
+                                      method='nearest', 
+                                      rescale=rescale)
     else:
         try:    
-            zn = sp.interpolate.griddata((x1, y1), z1, (x2, y2), method=method, rescale=rescale)
+            zn = sp.interpolate.griddata( (x1, y1), z1, (x2, y2), 
+                                          method=method, rescale=rescale)
         except: 
-            zn = sp.interpolate.griddata((x1, y1), z1, (x2, y2), method='nearest', rescale=rescale)
+            zn = sp.interpolate.griddata( (x1, y1), z1, (x2, y2), 
+                                          method='nearest', rescale=rescale)
 
     if fillnan is True :
         
         if ( np.size( zn ) == 1 ) and ( np.any( np.isnan( zn ) ) ) :
-            zn = sp.interpolate.griddata( ( x1, y1 ), z1, ( x2, y2 ), method='nearest' ) 
+            zn = sp.interpolate.griddata( ( x1, y1 ), z1, ( x2, y2 ), 
+            method='nearest' ) 
             
         if ( np.size( zn ) > 1 ) and ( np.any( np.isnan( zn ) ) ) :
             idx = np.isnan( zn )
@@ -630,14 +665,7 @@ def xyz2xy( xyz, xy, method='nearest', algebra=None,
                      vmax=sts[2]+sts[3]*2, cmap='rainbow' )
         plt.colorbar()
 
-    if algebra is not None:
-        
-        if algebra == 'diff':
-            za = z2 - zn
-        return zn, za
-
-    else:
-        return zn
+    return zn
 
 # -----------------------------------------------------------------------------
 def find_by_att( dat1, dat2, col_xy, delta_xy, col_att, delta_att, condition=True,
@@ -796,9 +824,11 @@ def deg2m(dd, lat=None, n_digits=3, R=R_wgs84):
     return md
 
 # -----------------------------------------------------------------------------
-def pad_array( array, padw=25, mode='edge', alpha=None, constant_values=np.nan,
+def pad_array( array, padw=25, mode='edge', alpha=None, 
+               constant_values=np.nan,
                plot=False, vmin=None, vmax=None, iter=1, 
-               ptype='percentage', sqr_area=False ):
+               ptype='percentage', sqr_area=False, 
+               equal_shape=False, smooth=0 ):
     
     ny, nx = array.shape
     
@@ -811,19 +841,30 @@ def pad_array( array, padw=25, mode='edge', alpha=None, constant_values=np.nan,
     if sqr_area == True:
         if ny > nx : padw[1] = padw[1] + ny - nx
         if ny < nx : padw[0] = padw[0] + nx - ny
-            
+
+    if equal_shape:
+        diff = abs(ny - nx)
+        if ny > nx:
+            padw[1] += diff // 2
+            padw[0] += diff - diff // 2
+        elif nx > ny:
+            padw[0] += diff // 2
+            padw[1] += diff - diff // 2
     
-    if mode in ('surface', 'gdal'): 
-        pad_array = np.pad( array, pad_width=( ( padw[0], padw[0] ), ( padw[1], padw[1] ) ), 
+    if mode in ( 'surface', 'gdal', 'thin_plate' ): 
+        pad_array = np.pad( array, pad_width=( ( padw[0], padw[0] ), 
+                            ( padw[1], padw[1] ) ), 
                             mode='constant', constant_values=np.nan )
-        pad_array = fillnan( pad_array, method=mode, iter=iter )
-        print( 'Surface padding applied' )
+        pad_array = fillnan( pad_array, method=mode, 
+                             iter=iter, smooth=smooth )
 
     elif mode == 'constant' : 
-        pad_array = np.pad( array, pad_width=((padw[0], padw[0]), (padw[1], padw[1])), 
+        pad_array = np.pad( array, pad_width=((padw[0], padw[0]), 
+                            (padw[1], padw[1])), 
                             mode=mode, constant_values=constant_values )        
     else: 
-        pad_array = np.pad( array, pad_width=((padw[0], padw[0]), (padw[1], padw[1])), 
+        pad_array = np.pad( array, pad_width=((padw[0], padw[0]), 
+                           (padw[1], padw[1])), 
                             mode=mode )
     
     pnx, pny = pad_array.shape
@@ -846,10 +887,12 @@ def pad_xx_yy( pad_arr, xx, yy, plot=False ):
     dy = abs( np.mean(np.diff( yy, axis=0 ) ) )
     
     a, c = pad_arr[0], pad_arr[1]
+    
     xmin1, xmax1 = np.min(xx), np.max(xx)
     ymin1, ymax1 = np.min(yy), np.max(yy)
     xmin2, xmax2 = xmin1 - dx * c[2], xmax1 + dx * (a.shape[1] - c[3])
     ymax2, ymin2 = ymax1 + dy * c[0], ymin1 - dy * (a.shape[0] - c[1])
+
     xv = np.linspace(xmin2, xmax2, a.shape[1])
     yv = np.linspace(ymax2, ymin2, a.shape[0])
     xxn, yyn = np.meshgrid( xv, yv )
@@ -1232,8 +1275,8 @@ def plta( array,
         ax.set_ylim( lim[2], lim[3] )
     
     if contours != [] :
-        smoothed_array = sp.ndimage.gaussian_filter(np.ma.masked_invalid(np.flipud(array)), sigma=3)
-        cont = ax.contour( smoothed_array, 
+        # smoothed_array = sp.ndimage.gaussian_filter(np.ma.masked_invalid( np.flipud(array)), sigma=3)
+        cont = ax.contour( array, 
                            levels=contours, extent=lim, colors=cc,
                            linestyles='solid', origin=origin)  
         
@@ -1270,7 +1313,6 @@ def plta( array,
     if ( out_lim is not None ) and ( out_lim != [] ) :
         ax.set_xlim( [ out_lim[0], out_lim[1] ] )
         ax.set_ylim( [ out_lim[2], out_lim[3] ] )
-
 
     return ax
         
@@ -1735,13 +1777,13 @@ def fillnan( array,
              xy=None, 
              method='nearest', 
              size=3, 
-             iter=1, 
+             iter=1,
+             smooth=0, 
              maxSearchDist=None, 
              plot=False, 
              vmin=None, 
              vmax=None, 
              edges=False, 
-             smooth=0, 
              tension=0.35 ) :
     
     zz = np.copy( array )
@@ -1756,7 +1798,7 @@ def fillnan( array,
     if xy is not None:
         xx, yy = xy[0], xy[1]
         
-    zz_nan = np.isnan( zz )  
+    zz_nan = np.isnan( zz )
     
     x, y, z = xx.flatten(), yy.flatten(), zz.flatten()
     nan = np.isnan(z)
@@ -1794,34 +1836,26 @@ def fillnan( array,
         raster.GetRasterBand( 1 ).SetNoDataValue( 1e-24 )
         
         out_band = raster.GetRasterBand( 1 )
-        out_band.WriteArray( zz )        
+        out_band.WriteArray( zz )
         
         if maxSearchDist is None: 
             maxSearchDist = int( np.max( zz.shape ) )
             
-        gdal.FillNodata( targetBand = raster.GetRasterBand(1), maskBand=None, 
+        gdal.FillNodata( targetBand = raster.GetRasterBand(1), 
+                         maskBand=None, 
                          maxSearchDist=maxSearchDist,
                          smoothingIterations=iter )
         
         zzfn = raster.GetRasterBand( 1 ).ReadAsArray()
         zzfn[ zzfn == 1e-24 ] = np.nan
         raster = None
-        
-    if method in ( 'gauss', 'uniform' ) :
-        zn = np.copy( zz ) - np.nanmean( zz )
-        zn = grid_fill( zn, invalid=None )
-        if method == 'gauss' :
-            func = sp.ndimage.gaussian_filter
-        if method == 'uniform' :
-            func = sp.ndimage.uniform_filter
-        
-        for i in range( iter ) :
-            FG = func( zn, size )
-            WF = func( ~zz_nan*1.0, size )
-            DFG =  zn - FG
-            zn = FG + DFG * WF 
-        
-        zzfn = zn + np.nanmean( zz )
+
+    if method == 'thin_plate':
+        zfn = xyz2xy( ( xi, yi, zi ), (xn, yn), method='thin_plate', smooth=smooth )
+        zfn = zfn( xn, yn )
+        zn = np.copy( z )
+        zn[nan] = zfn
+        zzfn = zn.reshape( zz.shape )
         
     if method == 'surface':
         print( xx.shape )
@@ -1995,24 +2029,33 @@ def sort_lines( xyzl, prjcode_in=None, prjcode_out=None, add_dist=True,
     return new_xyzl
 
 # -----------------------------------------------------------------------------
-def join_lines( xyzl, dist_th=10000, line_c=3, x_c=0, y_c=1, new_line_c=None ):
+def join_lines(xyzl, dist_th=10000, angle_th=30, line_c=3, x_c=0, y_c=1, new_line_c=None):
     """
-    Joins a set of lines into larger segments based on the distance between the end of one line and the start of the next.
+    Joins a set of lines into larger segments based on 
+    the distance between the end of one line and the start of the next,
+    and the angle between the lines.
     
     Parameters:
     -----------
-    xyzl : numpy.ndarray
-        A numpy array containing the x, y, z coordinates of the points and the line number they belong to.
-    dist_th : float, optional
-        The maximum distance between the end of one line and the start of the next to consider them part of the same segment. Default is 1000.
-    line_c : int, optional
-        The index of the column containing the line number in the input array. Default is 3.
-    x_c : int, optional
-        The index of the column containing the x coordinate in the input array. Default is 0.
-    y_c : int, optional
-        The index of the column containing the y coordinate in the input array. Default is 1.
-    new_line_c : int, optional
-        The index of the column containing the new line number in the output array. If None, the original line numbers are used. Default is None.
+        - xyzl : numpy.ndarray
+            A numpy array containing the x, y, z coordinates of 
+            the points and the line number they belong to.
+        - dist_th : float, optional
+            The maximum distance between 
+            the end of one line and the start of 
+            the next to consider them part of the same segment. Default is 1000.
+        - angle_th : float, optional
+            The maximum angle between the end of one line and 
+            the start of the next to consider them part of the same segment. Default is 30 degrees.
+        - line_c : int, optional
+            The index of the column containing the line number in the input array. Default is 3.
+        - x_c : int, optional
+            The index of the column containing the x coordinate in the input array. Default is 0.
+        - y_c : int, optional
+            The index of the column containing the y coordinate in the input array. Default is 1.
+        - new_line_c : int, optional
+            The index of the column containing the new line number in the output array. 
+            If None, the original line numbers are used. Default is None.
         
     Returns:
     --------
@@ -2030,18 +2073,26 @@ def join_lines( xyzl, dist_th=10000, line_c=3, x_c=0, y_c=1, new_line_c=None ):
         xyzl = np.column_stack((xyzl, np.ones(xyzl.shape[0]) * np.nan))
 
     # Initialize the output array
-    i0 = xyzl[:,line_c] == xyzl[0, line_c]
+    i0 = xyzl[:, line_c] == xyzl[0, line_c]
     xyzl_new = xyzl[i0]
     xyzl_new[:, new_line_c] = 0
 
     # Get the unique line numbers
-    lines = np.unique( xyzl[:, line_c] )
+    lines = np.unique(xyzl[:, line_c])
 
     # Initialize the new line number
     new_line_num = 0
 
+    # Function to calculate the angle between two vectors
+    def calculate_angle(v1, v2):
+        unit_v1 = v1 / np.linalg.norm(v1)
+        unit_v2 = v2 / np.linalg.norm(v2)
+        dot_product = np.dot(unit_v1, unit_v2)
+        angle = np.arccos(dot_product)
+        return np.degrees(angle)
+
     # Loop through each line
-    for i in range(len(lines) - 1) :
+    for i in range(len(lines) - 1):
 
         # Get the current line and the next line
         line1 = xyzl[xyzl[:, line_c] == lines[i]]
@@ -2050,12 +2101,21 @@ def join_lines( xyzl, dist_th=10000, line_c=3, x_c=0, y_c=1, new_line_c=None ):
         # Calculate the distance between the last point of the current line and the first point of the next line
         dist = np.sqrt((line1[-1, x_c] - line2[0, x_c])**2 + (line1[-1, y_c] - line2[0, y_c])**2)
 
-        # If the distance is less than the threshold, join the line numbers
-        if dist <= dist_th:
+        # Initialize angle to a low value
+        angle = 0
+
+        # Calculate the angle if both lines have more than one point
+        if len(line1) > 1 and len(line2) > 1:
+            v1 = line1[-1, [x_c, y_c]] - line1[-2, [x_c, y_c]]
+            v2 = line2[1, [x_c, y_c]] - line2[0, [x_c, y_c]]
+            angle = calculate_angle(v1, v2)
+
+        # If the distance is less than the threshold and the angle is less than the threshold, join the line numbers
+        if dist <= dist_th and (len(line1) == 1 or len(line2) == 1 or angle <= angle_th):
             # Set the new line number for the points in the current line
             line2[:, new_line_c] = new_line_num
 
-        # If the distance is greater than the threshold, start a new line
+        # If the distance is greater than the threshold or the angle is greater than the threshold, start a new line
         else:
             # Set the new line number for the points in the next line
             line2[:, new_line_c] = new_line_num + 1
@@ -2064,7 +2124,6 @@ def join_lines( xyzl, dist_th=10000, line_c=3, x_c=0, y_c=1, new_line_c=None ):
 
         # Add the current line to the output array
         xyzl_new = np.vstack((xyzl_new, line2))
-
 
     return xyzl_new
 
@@ -2135,11 +2194,6 @@ def split_lines( xyzl,
     if order_c != 'same' :
         xyzl = sort_lines( xyzl, add_dist=False, line_c=line_c, x_c=x_c, y_c=y_c,
                            order_c=order_c )
-
-    # Join the lines to ensure that all lines are split
-    if join_th is not None :
-        xyzl = join_lines( xyzl, dist_th=join_th, line_c=line_c, x_c=x_c, y_c=y_c )
-
 
     # If the new_line_c is None or False use the column indicated by line_c
     if ( ( new_line_c is None ) or ( new_line_c is False ) ) :
@@ -2252,73 +2306,56 @@ def split_lines( xyzl,
                     continue
 
                 rel_dist = geo_line_dist(ls[:, x_c], ls[:, y_c])[:, 0]
-
                 indices = np.where(rel_dist > dist_th)[0]
 
-                # Add 1 to the indices
-                # because np.split splits *before* the given indices
-                indices += 1
-
-                # Add 0 at the start and len(arr) at the end, to include all elements
-                indices = np.concatenate(([0], indices, [ls.shape[0]]))
-
                 # Split arr into multiple arrays at the indices
-                split_arrs = [ls[i:j] for i, j in zip(indices[:-1], indices[1:])]
-
+                split_arrs = np.split(ls, indices)
+                
+                # Check for small segments and merge them if needed
+                final_segments = []
                 for i, arr in enumerate(split_arrs):
-
                     if arr.shape[0] < n_points:
+                        if i > 0:
+                            # Merge with the previous segment
+                            final_segments[-1] = np.vstack((final_segments[-1], arr))
+                        elif i < len(split_arrs) - 1:
+                            # Merge with the next segment
+                            split_arrs[i + 1] = np.vstack((arr, split_arrs[i + 1]))
                         continue
+                    final_segments.append(arr)
 
-                    # Check if the first point of the new line is the same as the last point of the previous line
-                    if i > 0 and np.array_equal(arr[0], split_arrs[i - 1][-1]):
-                        # If it is, skip this line
-                        continue
-
-                    arr[:, new_line_c] = nl
-                    xyzl_new = np.vstack((xyzl_new, arr))
+                # After merging, add the segments to the final output
+                for seg in final_segments:
+                    seg[:, new_line_c] = nl
+                    xyzl_new = np.vstack((xyzl_new, seg))
                     nl += 1
 
         xyli = xyzl_new
 
+
+    # Join the lines to ensure that all lines are split
+    if join_th is not None :
+        xyzl_new = join_lines( xyzl_new, 
+                               dist_th=join_th, 
+                               line_c=new_line_c, 
+                               x_c=x_c, y_c=y_c, 
+                               angle_th=angle_th )
+
+
     # Plot the split lines if specified
-    if plot is True :
+    if plot is not None:
 
         plt.close('Splitted lines')
         plt.figure('Splitted lines')
-
-        plt.subplot( 1, 2, 1 )
         
         lineso = np.unique( xyzl[ :, line_c ])
         linesn = np.unique( xyzl_new[ :, new_line_c ])
 
-        for l in lineso :
-
-            idx = xyzl[ : , line_c ] == l
-            line = xyzl[ idx ]
-            plt.plot( line[:,x_c], line[:,y_c], c='k', 
-                      linestyle='dashed', alpha=0.5, 
-                      linewidth=size )
-            plt.text( line[0,x_c], line[0,y_c], str(int(l)) )
-
-        plotted_lines = plt.gca().get_lines()
-        last_line = plotted_lines[-1]
-        # Get the linewidth of the last line
-        lw = last_line.get_linewidth()
-
         for l in linesn :
 
             idx = xyzl_new[ : , new_line_c ] == l
             line = xyzl_new[ idx ]
-            plt.plot( line[:,x_c], line[:,y_c], linewidth = lw*2 )
-
-        plt.subplot( 1, 2, 2 )
-
-        for l in linesn :
-
-            idx = xyzl_new[ : , new_line_c ] == l
-            line = xyzl_new[ idx ]
-            plt.plot( line[:,x_c], line[:,y_c], c='k', 
+            plt.plot( line[:,x_c], line[:,y_c], 
                       linestyle='dashed', alpha=0.5, 
                       linewidth=size )
             plt.text( line[0,x_c], line[0,y_c], str(int(l)) )
@@ -2417,12 +2454,12 @@ def pad_lines( xyzl, pad_dist, pad_idx=-1, prjcode_in=None,
                 
             if radius != 0 : 
                 nearest_i = neighboring_points( ( line[ :, x_c ], line[ :, y_c ] ), 
-                              ( line[ 0, x_c ], line[ 0, y_c ] ), radius )[2]
+                              ( line[ 0, x_c ], line[ 0, y_c ] ), radius )[1]
                 rampi = normalize( ramp, line[ 0, z_c ], 
                                    np.nanmean( line[ nearest_i, z_c ] ) )
                 new_line[0:n,z_c] = rampi
                 nearest_f = neighboring_points( ( line[ :, x_c ], line[ :, y_c ] ), 
-                              ( line[ -1, x_c ], line[ -1, y_c ] ), radius )[2]
+                              ( line[ -1, x_c ], line[ -1, y_c ] ), radius )[1]
                 rampf = normalize( ramp, line[ -1, z_c ], 
                                    np.nanmean( line[ nearest_f, z_c ] ) )
                 new_line[-n:,z_c] = np.flipud( rampf )                  
@@ -2930,7 +2967,11 @@ def array2csv( array, headers=[], sep=',', fmt='% 15.6f',
     return abs_path
 
 # -----------------------------------------------------------------------------
-def read_csv(csv_file, sep=' ', header=None, skiprows=[], skipcols=[], force_str=False):
+def read_csv( csv_file, sep=' ', 
+              header=None, 
+              skiprows=[], 
+              skipcols=[], 
+              force_str=False ):
     """
     Reads a CSV file and returns the data as a dictionary, 
     array, header, format, comments, and raw data.
@@ -2957,6 +2998,9 @@ def read_csv(csv_file, sep=' ', header=None, skiprows=[], skipcols=[], force_str
     # Initialize the header to None
     hd = None
 
+    if type( skiprows ) in [ int, float ] :
+        skiprows = [ int(sr) for sr in range(skiprows) ]
+
     # Open the CSV file
     with open(csv_file, "r", encoding="utf8", errors='ignore') as f:
         # Read all lines from the file
@@ -2964,16 +3008,20 @@ def read_csv(csv_file, sep=' ', header=None, skiprows=[], skipcols=[], force_str
 
     # Loop over each line in the file
     for i, line in enumerate(lines):
-        # If the current line is in the list of lines to skip, continue to the next line
+        # If the current line is in the list of lines to skip, 
+        # continue to the next line
         if i in skiprows:
             continue
 
         # Split the line into data using the separator
         line_data = line.split(sep)
-        # Strip whitespace from each data item and ignore items in the skipcols list
-        line_data = [item.strip() for idx, item in enumerate(line_data) if idx not in skipcols and item.strip() != '']
+        # Strip whitespace from each data item 
+        # and ignore items in the skipcols list
+        line_data = [ item.strip() for idx, item in enumerate(line_data) 
+                      if idx not in skipcols and item.strip() != '' ]
 
-        # If the current line is the header line, store the data as the header and continue to the next line
+        # If the current line is the header line, 
+        # store the data as the header and continue to the next line
         if i == header:
             hd = line_data
             continue
@@ -2984,7 +3032,7 @@ def read_csv(csv_file, sep=' ', header=None, skiprows=[], skipcols=[], force_str
 
         # If the data list is empty, initialize it with empty lists for each column
         if data == []:
-            data = [[] for _ in range(len(hd))]
+            data = [ [] for _ in range(len(hd)) ]
 
         # Loop over each value in the line data
         for c, val in enumerate(line_data):
@@ -3033,26 +3081,43 @@ def csv2array( csv_file, sep=',', header=None, skiprows=[], encoding="utf8",
     return a
    
 # ----------------------------------------------------------------------------- 
-def dict2array( dictionary, exclude=[], dtype=float, print_headers=False ) :
+def dict2array( dictionary, exclude=[], flen=None ) :
     
     headers = []
-    
-    for i, k in enumerate( dictionary ) :
         
-        if k in exclude :
-            continue
-        if i == 0 :
-            array = np.copy( dictionary[k] )  
-            array = array.astype( dtype )
-        else : 
-            array = np.column_stack( ( array, dictionary[k].astype( dtype ) ) )  
-        
-        headers.append( k )  
-        
-    if print_headers is True :
-        for i, k in enumerate( headers ) :
-            print( str(i)+':'+k,'|',  end=' ' )
+    field_len = [] 
 
+    for k in dictionary :
+        dictionary[ k ] = np.array( dictionary[ k ] ).ravel()
+        field_len.append( np.size( dictionary[ k ] ) )
+        
+    if flen is None :
+        flen = np.max( field_len )
+        
+    array = np.zeros( flen )
+
+    for i, k in enumerate( dictionary ) :
+
+        if np.size(dictionary[k]) != flen :
+            if type(dictionary[k][0]) is float :
+                pad_value = dictionary[k][0] if len(dictionary[k]) == 1 else np.nan
+            elif type(dictionary[k][0]) is int :
+                pad_value = dictionary[k][0] if len(dictionary[k]) == 1 else 0
+            elif type(dictionary[k][0]) is str :
+                pad_value = dictionary[k][0] if len(dictionary[k]) == 1 else ''
+            else :
+                pad_value = 0
+            dictionary[k] = np.pad( dictionary[k], (0, flen - len(dictionary[k])), 
+                                    constant_values=pad_value )
+
+        if k not in exclude :
+            carray = np.asarray( dictionary[ k ] )
+            if type( carray[0] ) == np.datetime64 :
+                carray = np.array( [ str( c ) for c in carray ] )
+            array = np.column_stack( (  array, carray ) )
+            headers.append( k )
+            
+    array = array[:, 1:]
     
     return array, headers
             
@@ -3180,7 +3245,7 @@ def merge2Darrays( array_list,
                    buffer=None, 
                    plot_diff=False, 
                    s=None, 
-                   iter=1 ):
+                   iter=None ):
     """
     Merge multiple 2D arrays into a single array.
 
@@ -3216,8 +3281,12 @@ def merge2Darrays( array_list,
         shape2 = Z2.shape
         shape_ratio = shape1[0]/shape2[0], shape1[1]/shape2[1]
         res_ratio = round( res_list[i] / res_list[i-1] ) 
+
         if buffer is None :
             buffer = int( res_ratio )
+
+        if sigmab is None :
+            sigmab = int( buffer )
             
         buffer = buffer * sigmab
 
@@ -3380,40 +3449,40 @@ def hanning_filt( array, padw=0, pmode='linear_ramp',
                   plot=False, vmin=None, vmax=None, iter=1 ) :
     
     ar_pad, original_shape_indx = pad_array(array, padw, pmode)
-    fw = np.array( [ [ 0, 1, 0 ], [ 1, 2, 1 ], [ 0, 1, 0 ] ] ) / 6
+    fw = np.array([[0, 1, 0], [1, 2, 1], [0, 1, 0]]) / 6
     
-    for i in range( iter ) : 
-        ar_pad = signal.convolve2d( ar_pad, fw, mode='same' )
+    for i in range(iter):
+        ar_pad = sp.ndimage.convolve( ar_pad, fw, mode='nearest' )
     
-    ar_filt = crop_pad( ar_pad, original_shape_indx )
+    ar_filt = crop_pad(ar_pad, original_shape_indx)
     
-    if plot == True:
-        
-        plta( array, sbplt=[1, 3, 1], tit='Original')
-        plta( ar_filt, vmin, vmax, sbplt=[1, 3, 2], tit='Filtered')
-        plta( array - ar_filt, vmin, vmax, sbplt=[1, 3, 3], tit='Differences')
-        plt.tight_layout() 
+    if plot:
+        plta(array, sbplt=[1, 3, 1], tit='Original')
+        plta(ar_filt, vmin, vmax, sbplt=[1, 3, 2], tit='Filtered')
+        plta(array - ar_filt, vmin, vmax, sbplt=[1, 3, 3], tit='Differences')
+        plt.tight_layout()
         
     return ar_filt
 
 # -----------------------------------------------------------------------------
-def gauss_filt( array, radius=1, sigma=1, padw=0, pmode='linear_ramp', 
-                alpha=None, iter=1, plot=False, vmin=None, vmax=None ):
+def gauss_filt( array, radius=None, sigma=1, padw=0, pmode='linear_ramp', 
+                alpha=None, iter=1, plot=False, vmin=None, vmax=None,
+                truncate=4.0 ):
 
-    ar_pad, original_shape_indx = pad_array(array, padw=padw, mode=pmode, alpha=alpha)
+    ar_pad, original_shape_indx = pad_array( array, 
+                                             padw=padw, 
+                                             mode=pmode, 
+                                             alpha=alpha )
 
-    x, y = np.mgrid[-radius:radius + 1, -radius:radius + 1]
-#    normal = 1 / (2.0 * np.pi * sigma ** 2)
-#    fw = np.exp(-((x ** 2 + y ** 2) / (2.0 * sigma ** 2))) * normal
+    # N.B. radius = round(truncate * sigma)
+
     if radius is not None :
-        w = radius * 2 + 1
-        truncate = ( ( ( w - 1 ) / 2 ) - 0.5 ) / sigma
-    else :
-        truncate = 4
+        sigma = radius / truncate
 
     for i in range( iter ) : 
-#        ar_pad = signal.convolve2d(ar_pad, fw, mode='same')
-        ar_pad = sp.ndimage.gaussian_filter(ar_pad, sigma, truncate=truncate)
+        ar_pad = sp.ndimage.gaussian_filter( ar_pad, 
+                                             sigma,
+                                              truncate=truncate )
     
     ar_filt = crop_pad( ar_pad, original_shape_indx )
     
@@ -3427,7 +3496,7 @@ def gauss_filt( array, radius=1, sigma=1, padw=0, pmode='linear_ramp',
     return ar_filt
 
 # -----------------------------------------------------------------------------
-def resampling_filt( array, factor, padw=0, pmode='gdal', 
+def resampling_filt( array, factor, padw=0, pmode='linear_ramp', 
                      alpha=None, spl_order=2, 
                      plot=False, vmin=None, vmax=None ) :
     
@@ -3482,8 +3551,18 @@ def std_filt( array, padw=0, pmode='gdal', radius=1, n=1,
     return ar_filt        
 
 #------------------------------------------------------------------------------
-def filt2d( array, radius=1, padw=0, pmode='linear_ramp', plot=False, vmin=None, 
-            vmax=None, iter=1, ftype='mean', sigma=1, factor=2, mask=None,
+def filt2d( array, 
+            radius=1, 
+            padw=0, 
+            pmode='linear_ramp', 
+            plot=False, 
+            vmin=None, 
+            vmax=None, 
+            iter=1, 
+            ftype='mean', 
+            sigma=1, 
+            factor=2, 
+            mask=None,
             fill=None ):
 
     if type( ftype ) is str :
@@ -3501,17 +3580,32 @@ def filt2d( array, radius=1, padw=0, pmode='linear_ramp', plot=False, vmin=None,
     for i, f in enumerate( ftype ) :
         
         if ftype[i] == 'mean' :
-            ar_filt = mean_filt( ar_filt, radius=radius, padw=padw, pmode=pmode, 
+            ar_filt = mean_filt( ar_filt, 
+                                 radius=radius, 
+                                 padw=padw, 
+                                 pmode=pmode, 
                                  iter=iter[i] )  
+            
         if ftype[i] == 'hanning' :
-            ar_filt  = hanning_filt( ar_filt, padw=padw, pmode=pmode, iter=iter[i] )
+            ar_filt  = hanning_filt( ar_filt, 
+                                     padw=padw, 
+                                     pmode=pmode, 
+                                     iter=iter[i] )
             
         if ftype[i] == 'median' :
-            ar_filt  = median_filt( ar_filt, radius=radius, padw=padw, pmode=pmode, 
-                                   iter=iter[i] )
+            ar_filt  = median_filt( ar_filt, 
+                                    radius=radius, 
+                                    padw=padw, 
+                                    pmode=pmode, 
+                                    iter=iter[i] )
         if ftype[i] == 'gauss' :
-            ar_filt  = gauss_filt( ar_filt, radius=radius, padw=padw, pmode=pmode, 
-                                   iter=iter[i], sigma=sigma ) 
+            ar_filt  = gauss_filt( ar_filt, 
+                                   radius=radius, 
+                                   padw=padw, 
+                                   pmode=pmode, 
+                                   iter=iter[i], 
+                                   sigma=sigma ) 
+            
         if ftype[i] == 'resamplig' :
             ar_filt  = resampling_filt( ar_filt, factor=factor, padw=padw, pmode=pmode ) 
             
@@ -3723,8 +3817,15 @@ def mask2D( xyr=None, xyzgrid=None, array=None, array_and_lim=None, mask=None,
     return ZM, isfinit
 
 #------------------------------------------------------------------------------
-def resampling( array, factor, spl_order=1, dimention='2D', mode='nearest', 
-                plot=False, vmin=None, vmax=None, cval=0.0, nan=True ) :
+def resampling( array, 
+                factor, 
+                spl_order=1, 
+                dimention='2D', 
+                mode='nearest', 
+                plot=False, 
+                vmin=None, vmax=None, 
+                nan=True,
+                prefilter=True ) :
 
     if type( array ) in ( list, tuple ) :
         
@@ -3752,12 +3853,12 @@ def resampling( array, factor, spl_order=1, dimention='2D', mode='nearest',
         IsNan = False
         
     azr = sp.ndimage.zoom( az, factor, order=spl_order, 
-                           mode=mode, prefilter=True ) 
+                           mode=mode, prefilter=prefilter ) 
     
     if IsNan == True :
         az [ inan ] = np.nan
         inanr = sp.ndimage.zoom( inan*1, factor, order=0, 
-                                 mode=mode, prefilter=True ).astype(bool)
+                                 mode=mode, prefilter=prefilter ).astype(bool)
         azr[ inanr ] = np.nan
     
     if plot == True :
@@ -3787,74 +3888,88 @@ def resampling( array, factor, spl_order=1, dimention='2D', mode='nearest',
         return azr
     
 # -----------------------------------------------------------------------------
-def neighboring_points(points1, points2, radius, method='circle', plot=False, s=None):
+def neighboring_points( points1, 
+                        points2, 
+                        radius,
+                        method='circle',
+                        idx1=None,
+                        idx2=None, 
+                        plot=False, s=None):
     """
     Find points in points1 that are within a specified radius of any point in points2.
 
     Args:
-        points1 (tuple/list of arrays): A tuple containing arrays of x and y coordinates for points1.
-        points2 (tuple/list of arrays): A tuple containing arrays of x and y coordinates for points2.
+        points1 (tuple/list of arrays): A tuple containing arrays of coordinates for points1.
+        points2 (tuple/list of arrays): A tuple containing arrays of coordinates for points2.
         radius (float): The radius within which points are considered neighbors.
         method (str, optional): The method for finding neighbors, it can be 'circle' or 'box'. Default is 'circle'.
         plot (bool, optional): Whether to create a scatter plot to visualize the selected points. Default is False.
         s (int, optional): Marker size for plotting. Default is None.
 
     Returns:
-        tuple: A tuple containing arrays of x and y coordinates for the selected points and a boolean array indicating selection.
+        tuple: A tuple containing arrays of coordinates for the selected points and a boolean array indicating selection.
     
-   Example:
-    X, Y = np.meshgrid( np.arange(0, 30, 1), np.arange(0, 30, 1) ) # np is: "import numpy as np" 
-    plt.figure() # plt is: "import matplotlib.pyplot as plt" 
-    idx = neighboring_points( ( 10, 10 ), (X, Y), 5, plot=True, method='circle' )        
+    Example:
+        X, Y = np.meshgrid(np.arange(0, 30, 1), np.arange(0, 30, 1))  # np is: "import numpy as np"
+        plt.figure()  # plt is: "import matplotlib.pyplot as plt"
+        idx = neighboring_points((10, 10), (X, Y), 5, plot=True, method='circle')
     """
 
     # Convert input arrays to NumPy arrays
-    x1, y1 = np.array(points1)
-    x2, y2 = np.array(points2)
+    points1 = np.array( points1 )
+    points2 = np.array( points2 )
 
-    # Store the original shape of x2 and y2
-    shape = x1.shape  
-    
+    # Select points based on the provided indices
+    if idx1 is not None:
+        points1 = points1[ :, idx1 ]
+    if idx2 is not None:
+        points2 = points2[ :, idx2 ]
+
+    # Ensure points1 and points2 have the same number of dimensions
+    assert points1.shape[0] == points2.shape[0], "points1 and points2 must have the same number of dimensions"
+
+    # Store the original shape of points1
+    shape = points1.shape[1:]
+
     # Finding neighboring points based on the chosen method
     if method == 'circle':
-
-        # Create a meshgrid of differences between x1 and x2, and y1 and y2
-        dx = np.subtract.outer(x2.ravel(), x1.ravel())
-        dy = np.subtract.outer(y2.ravel(), y1.ravel())
+        # Create a meshgrid of differences between points1 and points2 for each dimension
+        differences = [np.subtract.outer(points2[i].ravel(), points1[i].ravel()) for i in range(points1.shape[0])]
 
         # Calculate distances using vectorized operations
-        distances = np.sqrt(dx**2 + dy**2)
+        distances = np.sqrt(sum(diff**2 for diff in differences))
 
         # Find indices where distances are less than or equal to the radius
         is_neighbor = distances < radius
 
         # Use advanced indexing to select the points that meet the condition
-        selected_x = x1.ravel()[is_neighbor.any(axis=0)]
-        selected_y = y1.ravel()[is_neighbor.any(axis=0)]
+        selected_points = [points1[i].ravel()[is_neighbor.any(axis=0)] for i in range(points1.shape[0])]
 
-        # Reshape the boolean array to match the shape of x2 and y2
+        # Reshape the boolean array to match the shape of points1
         idx = is_neighbor.any(axis=0).reshape(shape)
 
     elif method == 'box':
-
         # Check if points2 are within a bounding box defined by points1 and the radius
-        idx = (x1 > np.nanmin(x2) - radius) & (y1 > np.nanmin(y2) - radius) & \
-              (x1 < np.nanmax(x2) + radius) & (y1 < np.nanmax(y2) + radius) 
-        
-        selected_x = x1[idx]
-        selected_y = y1[idx]
+        idx = np.all([(points1[i] > np.nanmin(points2[i]) - radius) & 
+                      (points1[i] < np.nanmax(points2[i]) + radius) for i in range(points1.shape[0])], axis=0)
 
-    if plot:
+        selected_points = [points1[i][idx] for i in range(points1.shape[0])]
 
-        # Plot the original points (xy2) and the selected points
-        plt.scatter(x2, y2, c='b', s=s, label='xy2')
-        plt.scatter(selected_x, selected_y, c='r', s=s, label='Selected Points')
-        plt.scatter(x1, y1, c='k', s=s, label='xy1', marker='x')
+    if idx1 is not None:
+        idx_new = np.full( np.size( idx1 ), False )
+        idx_new[ idx1 ] = idx
+        idx = idx_new
+
+    if plot and points1.shape[0] > 1:
+        # Plot the original points (points2) and the selected points
+        plt.scatter(points2[0], points2[1], c='b', s=s, label='points2')
+        plt.scatter(selected_points[0], selected_points[1], c='r', s=s, label='Selected Points')
+        plt.scatter(points1[0], points1[1], c='k', s=s, label='points1', marker='x')
         plt.legend()
         plt.title('Selected Points')
         plt.show()
 
-    return selected_x, selected_y, idx
+    return tuple(selected_points), idx
 
 # -----------------------------------------------------------------------------
 def alpha_shape(points, alpha):
@@ -3918,7 +4033,7 @@ def xy_in_hull( x, y, hull, buffer=0, plot=False ) :
     x, y = x.ravel(), y.ravel()
     
     if type( hull ) in ( list, tuple ) :
-        xp, yp = hull[0], hull[1]
+        xp, yp = np.asarray( hull[0] ), np.asarray( hull[1] )
         hull,_,_ = xy2convexhull( xp, yp )
             
     xy = np.column_stack( ( x, y ) )    
@@ -4200,7 +4315,7 @@ def print_table( table, headers=None,
                  colsxrow=100,
                  path_name=None, 
                  printf=True, 
-                 reshape=None ) :
+                 reshape=None ):
     """
     Prints a table of values with optional headers, formatting, and row/column selection.
 
@@ -4234,10 +4349,12 @@ def print_table( table, headers=None,
     # Initialize an empty string to hold the output
     output = ""
 
+    table = copy.deepcopy( table )
+
     # Check if the input table is a numpy array
     if type(table) == np.ndarray:
         # Create a copy of the table
-        table = table.copy()
+        table = table
 
     if cols is None :
         cols = []
@@ -4254,7 +4371,7 @@ def print_table( table, headers=None,
             if len( k ) > space:
                 space = len( k ) + 2
         # Convert the dictionary to an array
-        table, headers = dict2array(table)
+        table, headers = dict2array( table )
 
     # Check if the input table is a list or a tuple
     if type(table) in (list, tuple):
@@ -4428,7 +4545,7 @@ def print_table( table, headers=None,
     if printf is True :
         print(output)
 
-    print( "\nTotal rows: " + str(table.shape[0]) + '\n' )
+        print( "\nTotal rows: " + str(table.shape[0]) + '\n' )
 
     if ( path_name is not None ) and ( path_name is not False ) :
         with open( path_name, 'w' ) as f:
@@ -4461,11 +4578,11 @@ def combine64(years, months=1, days=1, hours=None, minutes=None,
             nanoseconds = seconds.copy() * 1e9
             seconds = None
 
-    vals = (years, months, days, hours, minutes, seconds,
-            milliseconds, microseconds, nanoseconds)
+    vals = ( years, months, days, hours, minutes, seconds,
+             milliseconds, microseconds, nanoseconds )
 
-    datetime_type = np.sum(np.asarray(v, dtype=t) for t, v in zip(types, vals)
-                           if v is not None)
+    datetime_type = np.sum( np.asarray(v, dtype=t) for t, v in zip(types, vals)
+                            if v is not None)
 
     return datetime_type
 
@@ -5033,14 +5150,17 @@ def datetime2time(  dates, unit='s', ref_time='1970-01-01T00:00:00' ) :
     Returns:
     numpy.ndarray: Array of time since the Unix epoch in the specified units.
     """
-    if unit == 'Y':
+    if unit == 'yy':
         # Convert datetime64 objects to days since the Unix epoch, then to years
         time = (dates - np.datetime64(ref_time)) / np.timedelta64(1, 'D')
         time /= 365.25 # Average length of a year in the Gregorian calendar
-    elif unit == 'M':
+    elif unit == 'mm':
         # Convert datetime64 objects to days since the Unix epoch, then to months
         time = (dates - np.datetime64(ref_time)) / np.timedelta64(1, 'D')
         time /= 30.44 # Average length of a month in the Gregorian calendar
+    elif unit == 'dd':
+        # Convert datetime64 objects to days since the Unix epoch in days
+        time = (dates - np.datetime64(ref_time)) / np.timedelta64(1, 'D')
     else:
         # Convert datetime64 objects to time since the Unix epoch in the specified units
         time = (dates - np.datetime64(ref_time)) / np.timedelta64(1, unit)
@@ -5155,28 +5275,14 @@ def reshapexyz_1D_2D( x, y, z=None, flipud=False, fliplr=False,
     return X, Y, Z
 
 # -----------------------------------------------------------------------------
-def fillnan_Rbf(x, y, z, rbf_function='thin_plate'):
-
-    # Separate the points with valid z values and the points with np.nan z values
-    mask = np.isnan(z)
-    x_known, y_known, z_known = x[~mask], y[~mask], z[~mask]
-    x_unknown, y_unknown = x[mask], y[mask]
-
-    # Create an Rbf interpolator using the points with valid z values
-    rbf = sp.interpolate.Rbf(x_known, y_known, z_known, function=rbf_function)
-
-    # Use the interpolator to compute z values for the points with np.nan z values
-    z_unknown = rbf(x_unknown, y_unknown)
-
-    # Replace the np.nan values in z with the computed values
-    z[mask] = z_unknown
-
-    return z
-
-# -----------------------------------------------------------------------------
-def fit_segmented_line( x, y, num_segments=None, threshold=1e-2, 
-                        null_intercept=False, plot=True,
-                        keep_nodes=[], move_nodes=[] ):
+def fit_segmented_line( x, y, 
+                        num_segments=None, 
+                        threshold=1e-2, 
+                        null_intercept=False,
+                        keep_nodes=[], 
+                        move_nodes=[],
+                        place_nodes=[], 
+                        plot=False ):
     """
     Fits a segmented line to the given data points.
 
@@ -5200,7 +5306,8 @@ def fit_segmented_line( x, y, num_segments=None, threshold=1e-2,
 
     Returns:
 
-        - array-like: An array of shape (num_segments, 2) containing the x and y coordinates 
+        - array-like: An array of shape (num_segments, 2) 
+            containing the x and y coordinates 
             of the fitted line segments.
     """
 
@@ -5208,40 +5315,38 @@ def fit_segmented_line( x, y, num_segments=None, threshold=1e-2,
         x = np.vstack([0] + x.tolist()).ravel()
         y = np.vstack([0] + y.tolist()).ravel()
 
-    coefficients = np.polyfit(x, y, 1) 
+    coefficients = np.polyfit( x, y, 1 ) 
     std = np.std( y )
     diff = std.copy()
     x_pol = np.linspace( 0, x.max(), 100 )
-    y_pol = np.polyval(coefficients, x_pol)
-    y_fit = np.polyval(coefficients, x)
+    y_pol = np.polyval( coefficients, x_pol )
+    y_fit = np.polyval( coefficients, x )
 
     i = 0
     while diff > threshold :
-
         i += 1
-
         Mx = np.ones((x.shape[0], i+1 ))
-        for j in range(i+1):
+        for j in range( i+1 ):
             Mx[:, j] = x.ravel()**j
         coefficients, _, _, _ = np.linalg.lstsq( Mx, y, rcond=None )
         y_fit = np.polyval( np.flip( coefficients ), x )
         res = y - y_fit
-        stdi = np.std(res)
+        stdi = np.std( res )
         diff = std - stdi
         std = stdi
 
     y_pol = np.polyval( np.flip( coefficients ), x_pol )
 
     # Calculate the first and second derivatives of y_pol
-    y_pol_fd = np.diff(y_pol)[:-1]
+    y_pol_fd = np.diff( y_pol )[:-1]
     x_pol_fd = x_pol[1:-1] - ( x_pol[1] - x_pol[0] ) / 2
-    y_pol_sd = np.diff(y_pol_fd)[:-1]
-    x_pol_sd = x_pol_fd[1:-1] - ( x_pol_fd[1] - x_pol_fd[0] ) / 2 
+    y_pol_sd = np.diff( y_pol_fd )[:-1]
+    x_pol_sd = x_pol_fd[1:-1] - ( x_pol_fd[1] - x_pol_fd[0] ) / 2
 
-    y_pol_int = np.interp(x_pol_sd, x_pol_fd, y_pol_fd)
+    y_pol_int = np.interp( x_pol_sd, x_pol_fd, y_pol_fd )
 
     # Calculate the curvature radius
-    curvature = np.abs(y_pol_sd) / (1 + y_pol_int**2)**1.5 
+    curvature = np.abs( y_pol_sd ) / ( 1 + y_pol_int**2 )**1.5
     # curvature = np.concatenate(([0,0], curvature, [0,0]))
 
     # Calculate the differences between consecutive elements
@@ -5281,10 +5386,21 @@ def fit_segmented_line( x, y, num_segments=None, threshold=1e-2,
             keep_nodes.insert(0, 0)
         if np.size(xe)-1 not in keep_nodes :
             keep_nodes.append( np.size(xe)-1 )
-        segments = segments[keep_nodes]
+        segments = segments[ keep_nodes ]
+
+    if place_nodes :
+        for i, pn in enumerate( np.column_stack( place_nodes ) ) :
+            ni = int( pn[0] )
+            xn = pn[1]
+            yn = np.polyval( np.flip( coefficients ), xn )
+            if i >= segments.shape[0]-1 :
+                segments = np.vstack( (segments, [xn, yn]) )
+            else :
+                segments[ni,0], segments[ni,1] = xn, yn
 
     # Objetive function
-    objf = lambda x, y, segments_x, segments_y : np.sum( ( y - np.interp( x, segments_x, segments_y ) )**2 )
+    objf = lambda x, y, segments_x, segments_y :\
+        np.sum( ( y - np.interp( x, segments_x, segments_y ) )**2 )
 
     # Gradient descent optimization
     def gradient_descent( objf, 
@@ -5367,3 +5483,144 @@ def fit_segmented_line( x, y, num_segments=None, threshold=1e-2,
         plt.gca().set_ylim([ymin, ymax])
 
     return fitted_segments
+
+# -----------------------------------------------------------------------------
+def refine_edges(data, radius=1):
+    # Create a structuring element, which is a square here
+    struct_elem = sp.ndimage.generate_binary_structure(2, 1)
+    
+    # Perform erosion followed by dilation (opening operation)
+    eroded = sp.ndimage.binary_erosion(data, structure=struct_elem, iterations=radius)
+    refined = sp.ndimage.binary_dilation(eroded, structure=struct_elem, iterations=radius)
+    
+    return refined
+
+# -----------------------------------------------------------------------------
+def pad_model_3d( model, pad=1, step=100, 
+                  plot=False, aspect='equal', vmin=None,
+                  vmax=None ) :
+    
+    if type( pad ) == int : 
+        pad = [ pad, pad, pad ]
+    
+    if type( step ) in ( int, float ) : 
+        step = [ step, step, step ]
+        
+    xn = np.unique( model['x'] )
+    yn = np.unique( model['y'] )
+    zn = np.unique( model['z'] )
+
+    xpad0 = np.linspace( xn[0], xn[0]-step[0]*pad[0], pad[0]+1 ) 
+    xpad1 = np.linspace( xn[-1], xn[-1]+step[0]*pad[0], pad[0]+1 ) 
+    xpad = np.concatenate( ( np.flip(xpad0[1:]), xn, xpad1[1:] ) )
+    
+    ypad0 = np.linspace( yn[0], yn[0]-step[1]*pad[1], pad[1]+1 ) 
+    ypad1 = np.linspace( yn[-1], yn[-1]+step[1]*pad[1], pad[1]+1 ) 
+    ypad = np.concatenate( ( np.flip(ypad0[1:]), yn, ypad1[1:] ) )
+    
+    zpad0 = np.linspace( zn[0], zn[0]-step[2]*pad[2], pad[2]+1 ) 
+    zpad1 = np.linspace(zn[-1], zn[-1]+step[2]*pad[2], pad[2]+1 ) 
+    zpad = np.concatenate( ( np.flip(zpad0[1:]), zn, zpad1[1:] ) )
+    
+    X, Y, Z = np.meshgrid( xpad, ypad, zpad )
+
+    for i in model.keys() :
+        if i in ('x', 'y', 'z') :
+            continue
+        model[i] = sp.interpolate.griddata( ( model['x'], model['y'], model['z'] ),
+                                    model[i], ( X.ravel(), Y.ravel(), Z.ravel() ),
+                                    method='nearest')
+    
+    # New model coordinates
+    model['x'], model['y'], model['z'] = X.ravel(), Y.ravel(), Z.ravel()
+    
+        
+    model['pad'] = ~( np.isin( model['x'], xn, assume_unique=False ) & \
+                      np.isin( model['y'], yn, assume_unique=False ) & \
+                      np.isin( model['z'], zn, assume_unique=False ) )
+    
+    return model
+
+# -----------------------------------------------------------------------------
+def costum_cmap(cmap_name, range_starts=[0], range_ends=[1], num_colors=256):
+    """
+    Create a custom colormap by modifying parts of an existing colormap.
+    The colors at range_starts in the original colormap are mapped to range_ends in the new colormap.
+    Colors below the first range_start are stretched to the first range_end,
+    and colors from the last range_start onwards are compressed to the last range_end.
+
+    Parameters:
+        cmap_name: str, name of the original colormap.
+        range_starts: list of floats, points in the original colormap to map to range_ends in the new colormap.
+        range_ends: list of floats, target positions in the new colormap where range_starts will be mapped.
+        num_colors: int, number of colors in the resulting colormap.
+
+    Returns:
+        new_cmap: LinearSegmentedColormap, the new custom colormap.
+    """
+    if len(range_starts) != len(range_ends):
+        raise ValueError("range_starts and range_ends must have the same length")
+
+    # Get the original colormap
+    original_cmap = plt.get_cmap(cmap_name)
+    
+    # Create the new positions for the colormap based on the transformation
+    new_positions = np.linspace(0, 1, num_colors)
+
+    def transform(x):
+        for start, end in zip(range_starts, range_ends):
+            if x < end:
+                # Stretch the colors below the current range_start to fill 0 to the current range_end
+                return (x / end) * start
+        # Compress the colors from the last range_start onwards to fill the last range_end to 1
+        return range_starts[-1] + ((x - range_ends[-1]) / (1 - range_ends[-1])) * (1 - range_starts[-1])
+
+    transformed_positions = np.vectorize(transform)(new_positions)
+    new_colors = original_cmap(transformed_positions)
+    
+    new_cmap = LinearSegmentedColormap.from_list(f'custom_{cmap_name}', new_colors)
+    
+    return new_cmap
+
+# -----------------------------------------------------------------------------
+def shrink_cmap(cmap_name, center_start=0.4, center_end=0.6, num_colors=256):
+    """
+    Create a custom colormap by shrinking the central values in favor of the extremes.
+    The colors between center_start and center_end in the original colormap are compressed,
+    and the colors outside this range are expanded.
+
+    Parameters:
+        cmap_name: str, name of the original colormap.
+        center_start: float, start of the central range to be compressed.
+        center_end: float, end of the central range to be compressed.
+        num_colors: int, number of colors in the resulting colormap.
+
+    Returns:
+        new_cmap: LinearSegmentedColormap, the new custom colormap.
+    """
+    if center_start >= center_end:
+        raise ValueError("center_start must be less than center_end")
+
+    # Get the original colormap
+    original_cmap = plt.get_cmap(cmap_name)
+    
+    # Create the new positions for the colormap based on the transformation
+    new_positions = np.linspace(0, 1, num_colors)
+
+    def transform(x):
+        if x < center_start:
+            # Expand the colors below center_start
+            return x * (center_start / center_end)
+        elif x > center_end:
+            # Expand the colors above center_end
+            return center_start + ((x - center_end) / (1 - center_end)) * (1 - center_start)
+        else:
+            # Compress the colors between center_start and center_end
+            return center_start + ((x - center_start) / (center_end - center_start)) * (center_end - center_start)
+
+    transformed_positions = np.vectorize(transform)(new_positions)
+    new_colors = original_cmap(transformed_positions)
+    
+    new_cmap = LinearSegmentedColormap.from_list(f'shrink_{cmap_name}', new_colors)
+    
+    return new_cmap

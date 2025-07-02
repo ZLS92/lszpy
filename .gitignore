@@ -13,5 +13,4 @@ dtu_data_extraction.py
 gdal_warp.py
 gobs2fa.py
 gobs2bg.py
-gobsbg.py
 gobs2sbg.py

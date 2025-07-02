@@ -611,14 +611,42 @@ def line_filt( xyzl, wind_size=3, prjcode_in=4326, filter_type='median',
     return xyzl_new, fl
         
 # -----------------------------------------------------------------------------
-def line_remres( xyzl, xyz_ref, wind_size=None, prjcode_in=4326, prjcode_out=4326,
-                 plot_lines=False, s=1, plot_cross=False, vminc=None, vmaxc=None,
-                 pad_idx=-1, plot=False, vmin=None, vmax=None, new_xy=True,
-                 x_c=0, y_c=1, z_c=2, line_c=3, units=None, ref_wl=16000,
-                 wind_factor=1, xyz_w=None, x_units='', y_units='[ mGal ]',
-                 adjst_lev=True, power=2, iterations=1, dist=None, spl_k=3, spl_s=0,
-                 median_lev=False, radius=[], median_lines=[], order_c=None,
-                 ref_res=1000, pad_dist=0, filt=None, wfilt=3 ) :
+def line_remres( xyzl, 
+                 xyz_ref, 
+                 wind_size=None, 
+                 prjcode_in=4326, 
+                 prjcode_out=4326,
+                 plot_lines=False, 
+                 s=1, 
+                 plot_cross=False, 
+                 vminc=None, vmaxc=None,
+                 pad_idx=-1, 
+                 plot=False, 
+                 vmin=None, vmax=None, 
+                 new_xy=True,
+                 x_c=0, y_c=1, z_c=2, 
+                 line_c=3, 
+                 units=None, 
+                 ref_wl=16000,
+                 wind_factor=1, 
+                 xyz_w=None, 
+                 x_units='', 
+                 y_units='[ mGal ]',
+                 adjst_lev=True, 
+                 power=2, 
+                 iterations=1, 
+                 dist=None, 
+                 spl_k=3, 
+                 spl_s=0,
+                 median_lev=False, 
+                 radius=[], 
+                 median_lines=[], 
+                 order_c=None,
+                 ref_res=1000, 
+                 pad_dist=0, 
+                 filt=None, 
+                 wfilt=3, 
+                 min_points=2 ) :
 
     xyzl = np.copy( xyzl )
     # xyz_ref = cop.copy( xyz_ref )
@@ -674,6 +702,14 @@ def line_remres( xyzl, xyz_ref, wind_size=None, prjcode_in=4326, prjcode_out=432
         print( 'window_size : ', round( wind_size, 2 ) )
     
     half_ws =  wind_size / 2
+
+    # Identify lines less then minimum number of points ( min_points )
+    linu = np.unique( xyzl[:,line_c] )
+    small_lines = []
+    for l in linu :
+        idx = xyzl[:,line_c] == l
+        if np.sum( idx ) < min_points :
+            small_lines.append( l )
         
     if dist is not None :
 
@@ -738,6 +774,7 @@ def line_remres( xyzl, xyz_ref, wind_size=None, prjcode_in=4326, prjcode_out=432
         z_rem = np.zeros( line.shape[0] )
         z_ref = ref_val[idx]
         z_w = weights[idx]
+        l_num = line[0, line_c]
 
         mean_line_step = utl.min_dist( line[:, x_c], line[:, y_c] )['mean']
         
@@ -749,15 +786,15 @@ def line_remres( xyzl, xyz_ref, wind_size=None, prjcode_in=4326, prjcode_out=432
         resamp_factor = int( mean_ref_step / mean_line_step )
         xx_ref, yy_ref, zz_ref = utl.resampling( ( xx_ref, yy_ref, zz_ref ), factor=resamp_factor  )       
         
-        if line.shape[0] > 1 : 
+        if ( line.shape[0] > 1 ) and ( l_num not in small_lines ) : 
 
             for i in range( line.shape[0] ) : 
 
                 win_i = utl.neighboring_points( ( line[:,x_c], line[:,y_c] ), 
-                                                ( line[i,x_c], line[i,y_c] ), half_ws )[2]
+                                                ( line[i,x_c], line[i,y_c] ), half_ws )[1]
                 
                 win_ii = utl.neighboring_points( ( xx_ref, yy_ref ), 
-                                                 ( line[i,x_c], line[i,y_c] ), half_ws )[2]
+                                                 ( line[i,x_c], line[i,y_c] ), half_ws )[1]
 
                 pl_i = xyzl[idx, z_c][ win_i ]
                 
@@ -904,6 +941,7 @@ def line_remres( xyzl, xyz_ref, wind_size=None, prjcode_in=4326, prjcode_out=432
         plt.gca().axes.yaxis.set_visible(False)
 
         plt.tight_layout()
+        plt.show()
         
     if plot_cross is True :
 
@@ -913,29 +951,27 @@ def line_remres( xyzl, xyz_ref, wind_size=None, prjcode_in=4326, prjcode_out=432
             vmaxc = np.nanmax( cover_o[:,6] )
         
         plt.close("Data_Lev_CrossPlot")
-        plt.figure("Data_Lev_CrossPlot", figsize=(8, 6))
-        
-        plt.subplot(1,2,1)
-        plt.scatter( cover_o[:,0], cover_o[:,1], s=s*10, c=cover_o[:,6], cmap='rainbow',
-                     vmin=vminc, vmax=vmaxc )
-        plt.gca().axes.xaxis.set_visible(False)
-        plt.gca().axes.yaxis.set_visible(False)
-        
-        plt.title( 'Cross-Over Error Original : \n' + f'Min={minz_o}  Max={maxz_o}  Mean={meanz_o}  Std={stdz_o}' )        
+        fig, axs = plt.subplots(1, 2, figsize=(8, 6), num="Data_Lev_CrossPlot")
 
-        plt.subplot(1,2,2)
-        plt.scatter( cover_f[:,0], cover_f[:,1], s=s*10, c=cover_f[:,6], cmap='rainbow',
-                      vmin=vminc, vmax=vmaxc )
-        plt.gca().axes.xaxis.set_visible(False)
-        plt.gca().axes.yaxis.set_visible(False)
-        
-        plt.title( 'Cross-Over Error Final : \n' + f' Min={minz_f}  Max={maxz_f}  Mean={meanz_f}  Std={stdz_f}' )    
+        scatter1 = axs[0].scatter(cover_o[:, 0], cover_o[:, 1], s=s*10, c=cover_o[:, 6], cmap='rainbow',
+                                vmin=vminc, vmax=vmaxc)
+        axs[0].axes.xaxis.set_visible(False)
+        axs[0].axes.yaxis.set_visible(False)
+        axs[0].set_title('Cross-Over Error Original : \n' + f'Min={minz_o}  Max={maxz_o}  Mean={meanz_o}  Std={stdz_o}')
 
-        plt.tight_layout()
+        scatter2 = axs[1].scatter(cover_f[:, 0], cover_f[:, 1], s=s*10, c=cover_f[:, 6], cmap='rainbow',
+                                vmin=vminc, vmax=vmaxc)
+        axs[1].axes.xaxis.set_visible(False)
+        axs[1].axes.yaxis.set_visible(False)
+        axs[1].set_title('Cross-Over Error Final : \n' + f' Min={minz_f}  Max={maxz_f}  Mean={meanz_f}  Std={stdz_f}')
 
-        cbar = plt.colorbar( ax=plt.gcf().axes, location='bottom', shrink=0.6 )     
-        plt.text(1.02, 0.5, '[ mGal ]', va='center', ha='left', rotation=0, transform=cbar.ax.transAxes)
+        fig.tight_layout()
 
+        cbar = fig.colorbar(scatter1, ax=axs, location='bottom', shrink=0.6)
+        cbar.ax.text(1.02, 0.5, '[ mGal ]', va='center', ha='left', rotation=0, transform=cbar.ax.transAxes)
+
+        plt.show()
+    
     if plot_lines == True :
         
         if units == 'degree' : 
@@ -949,7 +985,7 @@ def line_remres( xyzl, xyz_ref, wind_size=None, prjcode_in=4326, prjcode_out=432
                                  marker='+', marker_color='k', s=1.5, x_units=x_units, 
                                  y_units=y_units, c=['b','g','k', 'r'], 
                                  legend=[ 'original_line', 'leveled_line', 'reference_line', 'original_reference' ] ) 
-
+        plt.show()
     else : 
         fl = None
 
@@ -1740,7 +1776,97 @@ class TideModel():
         f.close()
 
 # -----------------------------------------------------------------------------
-def convert2burrisfmt( station, date, g, lon, lat, 
+def read_burris_file( file_path, fprint=False, **fprintargs ) :
+
+    with open(file_path, 'r') as file:
+
+        lines = file.readlines()
+    
+    file.close()
+
+    for i, line in enumerate( lines ) :
+
+        if i == 0 :
+            # Read the first line to get the headers
+            headers = line.strip().split(',')
+            # Initialize a dictionary with headers as keys and empty lists as values
+            data_dict = {header: [] for header in headers}
+        
+        # Iterate over each line in the file
+        else :
+            # Split the line by comma and strip to remove any leading/trailing whitespace
+            values = line.split(',')
+            # Iterate over each value and its corresponding header
+            for header, value in zip(headers, values):
+                # Append the value to the correct list in the dictionary
+                data_dict[header].append( value )
+
+    # Check if all dict. elements have the same size
+    keys_list = list( data_dict.keys() )
+    for i, k in enumerate( keys_list ) :
+        if i == 0 :
+            continue
+        if len( data_dict[k] ) != len( data_dict[ keys_list[i-1 ] ] ) :
+            raise ValueError( 'The number of elements in the columns are not the same' )
+
+    # Convert the lists to numpy arrays
+    for k in data_dict.keys() :
+        if 'ObsG' in k :
+            data_dict[k] = np.array( data_dict[k], dtype=float )
+        elif 'Dial' in k :
+            data_dict[k] = np.array( data_dict[k], dtype=float )
+        elif 'Feedback' in k :
+            data_dict[k] = np.array( data_dict[k], dtype=float )
+        elif 'Earthtide' in k :
+            data_dict[k] = np.array( data_dict[k], dtype=float )
+        elif 'Level Corr' in k :
+            data_dict[k] = np.array( data_dict[k], dtype=float )
+        elif 'Temp Corr' in k :
+            data_dict[k] = np.array( data_dict[k], dtype=float )
+        elif 'Beam Err' in k :
+            data_dict[k] = np.array( data_dict[k], dtype=float )
+        elif 'Height' in k :
+            data_dict[k] = np.array( data_dict[k], dtype=float )
+        elif 'Elev' in k :
+            data_dict[k] = np.array( data_dict[k], dtype=float )
+        elif 'Lat' in k :
+            data_dict[k] = np.array( data_dict[k], dtype=float )
+        elif 'Lon' in k :
+            data_dict[k] = np.array( data_dict[k], dtype=float )
+        elif 'Elapsed Ti' in k :
+            data_dict[k] = np.array( data_dict[k], dtype='float' )
+        elif 'Standard D' in k :
+            data_dict[k] = np.array( data_dict[k], dtype='float' )
+        elif 'Temperature' in k :
+            data_dict[k] = np.array( data_dict[k], dtype='float' )
+        else :
+            data_dict[k] = np.array( data_dict[k], dtype=str )
+
+    # Split the Date column into year, month, and day
+    data_dict['yy'] = np.zeros( np.size( data_dict['Date'] ), dtype=int )
+    data_dict['mm'] = np.zeros( np.size( data_dict['Date'] ), dtype=int )
+    data_dict['dd'] = np.zeros( np.size( data_dict['Date'] ), dtype=int )
+    for i, _ in enumerate( data_dict['Date'] ) :
+        data_dict['yy'][i] = data_dict['Date'][i].split('/')[0]
+        data_dict['mm'][i] = data_dict['Date'][i].split('/')[1]
+        data_dict['dd'][i] = data_dict['Date'][i].split('/')[2]
+
+    # Split the Time column into hour, minute, and second
+    data_dict['h'] = np.zeros( np.size( data_dict['Time'] ), dtype=int )
+    data_dict['m'] = np.zeros( np.size( data_dict['Time'] ), dtype=int )
+    data_dict['s'] = np.zeros( np.size( data_dict['Time'] ), dtype=float )
+    for i, _ in enumerate( data_dict['Time'] ) :
+        data_dict['h'][i] = data_dict['Time'][i].split(':')[0]
+        data_dict['m'][i] = data_dict['Time'][i].split(':')[1]
+        data_dict['s'][i] = data_dict['Time'][i].split(':')[2]
+
+    if fprint is True :
+        _ = utl.print_table( data_dict, **fprintargs )
+
+    return data_dict
+
+# -----------------------------------------------------------------------------
+def write_burris_file( station, date, g, lon, lat, 
                        elev=0, tide_corr=0, meter='D45', 
                        oper='abc', feedback=0, dial_setting=50000,
                        path_name='burris.dat', level_corr=0, 
