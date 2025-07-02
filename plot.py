@@ -5,31 +5,35 @@ Created on Sat Nov 21 22:32:47 2020
 @author: lzampa
 """
 
-import os 
-mdir = os.path.dirname(os.path.abspath(__file__))
+# -----------------------------------------------------------------------------
+# Import libraries
 
-import imp
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, RadioButtons, CheckButtons
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-import numpy as np
 import matplotlib.image as mpimg
 import matplotlib.ticker as ticker
 import matplotlib.dates as mdates
 import matplotlib.colors as LinearSegmentedColormap
-
-
-utl = imp.load_source( 'module.name', mdir+os.sep+'utils.py' )
-shp = imp.load_source( 'module.name', mdir+os.sep+'shp_tools.py' )
-rt = imp.load_source( 'module.name', mdir+os.sep+'raster_tools.py' )
-
+from . import utils as utl
+from . import raster_tools as rt
+from . import shp_tools as shp
 
 # -----------------------------------------------------------------------------
+# Set the aliases for some libraries from the utils module
+
 pltr = rt.pltr
 plta = utl.plta
+np = utl.np
+os = utl.os
+
+# -----------------------------------------------------------------------------
+# Alias for the current directory (main dir.)
+mdir = os.path.dirname(os.path.abspath(__file__))
 
 # -----------------------------------------------------------------------------
 def remove_plot( ax, label=[] ):
+
     if type( label ) not in ( list, tuple ) :
         label = [ label ]
     for ch in ax.get_children():

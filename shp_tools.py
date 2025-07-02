@@ -5,17 +5,30 @@ Created on Tue Oct 13 17:05:39 2020
 @author: zampa
 """
 
-import os 
+# -----------------------------------------------------------------------------
+# Import libraries
+
+from . import utils as utl
+from matplotlib import path as mpath 
+
+# -----------------------------------------------------------------------------
+# Set the aliases for some libraries from the utils module
+
+np = utl.np
+os = utl.os
+sys = utl.sys
+ogr = utl.ogr
+osr = utl.osr
+gdal = utl.gdal
+plt = utl.plt
+
+# -----------------------------------------------------------------------------
+# Alias for the current directory (main dir.)
 mdir = os.path.dirname(os.path.abspath(__file__))
 
-import sys
-sys.path.insert(1, mdir)
 
-import glob
-from osgeo import gdal, ogr, osr
-import numpy as np
-from matplotlib import pyplot as plt, path as mpath, patches as mpatches
-import utils as utl
+# -----------------------------------------------------------------------------
+# Define the dictionary of OGR types
 
 OGRTypes = { int: ogr.OFTInteger, str: ogr.OFTString, float: ogr.OFTReal,
              'str_': ogr.OFTString, 'float64':ogr.OFTReal,
@@ -23,18 +36,23 @@ OGRTypes = { int: ogr.OFTInteger, str: ogr.OFTString, float: ogr.OFTReal,
 
 # -----------------------------------------------------------------------------
 def write_points( x, y, fields=None, name='points_shp', path=None, prj_code=4326, 
-                  kml=True, csv=True, write_xy=True, dir_suffix='shp' ): 
+                  kml=True, csv=False, write_xy=True, dir_suffix='shp' ): 
     """
     Function to crete a .shp file of points given the points coordinates
     
-    x, y --> coordinates of points (it works if x and y are numpy_arrays, but it should works also with lists or tuples)
+    x, y --> coordinates of the points (it works if x and y are numpy_arrays, but it should works also with lists or tuples)
+    
     fields --> dictionary with attributes of each point 
                e.g fields={'height':heigh_of_points, 'height_error':h_err, ...} 
                (with 'heigh_of_points' and 'h_err' being numpy_arrays... but it should works also with lists or tuples)
+    
     name --> name of the new file (NB. the file is alwas created within a folder with its name) 
+    
     path --> path where the new/file_folder is created   
+    
     prj_code --> code from Proj library to identify the coordinate the reference systhem (default is geo. WGS84, i.e. 4326)
                  (if its an int. it will be recognized as an epsg code)   
+    
     kml, csv --> if True a copy of the file issaved also as GoogleEarth or Com.Sep.Val. formats 
     
     NB. THIS FUNTION IS BASED ON GDAL/OGR Python API (first tested whith gdal version 3.0.0)     

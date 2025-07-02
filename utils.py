@@ -9,22 +9,30 @@ import os
 import pyproj as prj
 import numpy as np
 import scipy as sp
-import platform
-from scipy import signal
-from matplotlib.widgets import LassoSelector
-from matplotlib.colors import LightSource, LinearSegmentedColormap
 import itertools
 import random
 import matplotlib.pyplot as plt
-from matplotlib import cm
 import time 
 import copy
-from matplotlib.path import Path
 import datetime
-from osgeo import gdal
-import shapely 
-from shapely.geometry import LineString, Point, Polygon
-
+from osgeo import gdal, osr, ogr
+import shutil
+import tempfile
+import platform
+import sys
+from matplotlib import cm
+from matplotlib import dates as mdates
+from matplotlib.widgets import LassoSelector
+from matplotlib.colors import LightSource
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib.path import Path
+from matplotlib.colors import LinearSegmentedColormap
+import shapely
+from shapely.geometry import Polygon, LineString, Point 
+from shapely.geometry import MultiPolygon, MultiPoint, MultiLineString
+from scipy import signal 
+import io 
+import pdfkit
 
 
 # -----------------------------------------------------------------------------
@@ -44,7 +52,7 @@ w_wgs84 = 7.292115*1e-5 # [rad/sec]
 # User color maps
 
 # ---
-# wysiwyg  (see GMT mapping-tools)
+# wysiwyg_gmt  (see GMT mapping-tools)
 # Define the colors
 wysiwyg_colors = [ (0.000000, (64/255, 0/255, 64/255)),
                    (0.052632, (64/255, 0/255, 192/255)),
@@ -162,6 +170,26 @@ def cm2in( cm ) :
     inches = cm * 1/2.54 
     
     return inches 
+
+# -----------------------------------------------------------------------------
+def is_number(value):
+    """
+    Check if the given value can be converted to a float.
+    Args:
+        value: The value to check.
+    Returns:
+        bool: True if the value can be converted to a float, False otherwise.
+    """
+    
+    try:
+        
+        float(value)
+        
+        return True
+    
+    except (ValueError, TypeError):
+        
+        return False
 
 # -----------------------------------------------------------------------------
 def tmi(t1=None, t2=None):
@@ -905,35 +933,34 @@ def pad_xx_yy( pad_arr, xx, yy, plot=False ):
     return xxn, yyn
     
 # -----------------------------------------------------------------------------
-def taper(array, alpha=0.5, plot=False, vmin=None, vmax=None):
-    """
-    Apply a tapering window to the input array.
+def taper( array, plot=False, vmin=None, vmax=None ):
+    
+    nx = array.shape[1]
+    ny = array.shape[0]
 
-    Parameters:
-    - array (ndarray): Input array to be tapered.
-    - alpha (float, optional): Parameter controlling the shape of the tapering window. Default is 0.5.
-    - plot (bool, optional): If True, plot the original array, tapering window, and tapered array. Default is False.
-    - vmin (float, optional): Minimum value for the plot color scale. Default is None.
-    - vmax (float, optional): Maximum value for the plot color scale. Default is None.
-
-    Returns:
-    - tarray (ndarray): Tapered array.
-    - taper_filt (ndarray): Tapering window used for tapering.
-
-    """
-    nx, ny = array.shape[1], array.shape[0]
-    tape_x = signal.tukey(nx, alpha=alpha)
-    tape_y = signal.tukey(ny, alpha=alpha)
+    # Create tapering windows using numpy.hanning
+    tape_x = np.hanning(nx)
+    tape_y = np.hanning(ny)
     
     t_xx, t_yy = np.meshgrid(tape_x, tape_y)
     taper_filt = t_xx * t_yy
     tarray = taper_filt * (array - np.nanmean(array))
     tarray = tarray + np.nanmean(array)
-          
-    if plot == True:
-        plta(array, sbplt=[1,3,1], vmin=vmin, vmax=vmax)
-        plta(taper_filt, sbplt=[1,3,2], vmin=vmin, vmax=vmax)
-        plta(tarray, sbplt=[1,3,3], vmin=vmin, vmax=vmax)
+    
+    if plot:
+        plt.subplot(1, 3, 1)
+        plt.imshow(array, vmin=vmin, vmax=vmax)
+        plt.title('Original Array')
+        
+        plt.subplot(1, 3, 2)
+        plt.imshow(taper_filt, vmin=vmin, vmax=vmax)
+        plt.title('Taper Filter')
+        
+        plt.subplot(1, 3, 3)
+        plt.imshow(tarray, vmin=vmin, vmax=vmax)
+        plt.title('Tapered Array')
+        
+        plt.show()
     
     return tarray, taper_filt
 
@@ -4129,48 +4156,6 @@ def filt_voids( xyzgrid, xyr, step=None, plot=False, vmin=None, vmax=None,
     return array
 
 # -----------------------------------------------------------------------------
-def sort_points( x, y, plot=False ) :
-    
-    xy = np.concatenate( ( x.reshape(-1,1), y.reshape(-1,1) ), axis=1 )     
-
-    # make PCA object
-    pca = PCA(2)
-    
-    # fit on data
-    pca.fit(xy)
-    
-    #transform into pca space   
-    xypca = pca.transform(xy) 
-    newx = xypca[:,0]
-    newy = xypca[:,1]
-
-    #sort
-    indexSort = np.argsort(x)
-    newx = newx[ indexSort ]
-    newy = newy[ indexSort ]
-
-    #add some more points (optional)
-#    f = sp.interpolate.interp1d(newx, newy, kind='linear')        
-#    newx = np.linspace(np.min(newx), np.max(newx), 100)
-#    newy = f( newx )            
-
-    #smooth with a filter (optional)
-#    window = 5
-#    newy = sp.signal.savgol_filter(newy, window, 2)
-
-    #return back to old coordinates
-    xyclean = pca.inverse_transform( np.concatenate( ( newx.reshape( -1, 1 ), 
-                                     newy.reshape( -1, 1 ) ), axis=1) )
-    x_new = xyclean[ :, 0 ]
-    y_new = xyclean[ :, 1 ]
-
-    if plot == True :
-        plt.plot( x_new, y_new )
-        plt.scatter( x_new, y_new )
-        
-    return indexSort, x_new, y_new
-
-# -----------------------------------------------------------------------------
 def mosaic_array( array_list, plot=False, vmin=None, vmax=None, ref_shape=0,
                  spl_order=1) :
     
@@ -4302,20 +4287,24 @@ def date2datetime( date, time, fmt='%d-%m-%y %H:%M:%S', array=True,
     return np_date_time
 
 # -----------------------------------------------------------------------------
-def print_table( table, headers=None, 
-                 space=12, decimals=2, 
-                 rows=[], cols=[],
-                 return_array=False, 
-                 idx=None, 
-                 title=None,
-                 row_index=True,
-                 col_index=True, 
-                 center_title=False,
-                 return_str=False,
-                 colsxrow=100,
-                 path_name=None, 
-                 printf=True, 
-                 reshape=None ):
+def print_table( table, 
+                 headers =None, 
+                 space = 12, 
+                 decimals = 2, 
+                 rows=[], 
+                 cols=[],
+                 return_array  =False, 
+                 idx = None, 
+                 title = None,
+                 row_index = True,
+                 col_index = True, 
+                 center_title = False,
+                 return_str = False,
+                 colsxrow = 100,
+                 path_name = None, 
+                 printf = True, 
+                 reshape = None, 
+                 print_tot_rows = True ):
     """
     Prints a table of values with optional headers, formatting, and row/column selection.
 
@@ -4339,6 +4328,7 @@ def print_table( table, headers=None,
         - path_name (str, optional): The path and name of the file to save the table. Defaults to None.
         - printf (bool, optional): Whether to print the table. Defaults to True.
         - reshape
+        - print_tot_rows (bool, optional): Whether to print the total number of rows at the end of the table. Defaults to True.
 
     Returns:
         - None: If return_str is False and return_array is False.
@@ -4487,13 +4477,21 @@ def print_table( table, headers=None,
         
         for j in range( table.shape[1] ):
 
-            if isinstance(table[i][j], (int, float)):
-            
+            if is_number( table[i][j] ):
+
+                num_i = float( table[i][j] )
+                
                 if is_int[i][j]:
+                    
+                    num_i = int( num_i )
+                    
                     ft = 'd'
+
                 else:
+
                     ft = f".{decimals[j]}f"
-                output += f"% {space}{ft}" % (table[i][j])
+                
+                output += f"% {space}{ft}" % ( num_i )
             
             else:
                 # Truncate the string if it's longer than `space`
@@ -4543,9 +4541,12 @@ def print_table( table, headers=None,
         output = title_str + output
 
     if printf is True :
+
         print(output)
 
-        print( "\nTotal rows: " + str(table.shape[0]) + '\n' )
+        if print_tot_rows is True:
+
+            print( "\nTotal rows: " + str(table.shape[0]) + '\n' )
 
     if ( path_name is not None ) and ( path_name is not False ) :
         with open( path_name, 'w' ) as f:
@@ -5624,3 +5625,109 @@ def shrink_cmap(cmap_name, center_start=0.4, center_end=0.6, num_colors=256):
     new_cmap = LinearSegmentedColormap.from_list(f'shrink_{cmap_name}', new_colors)
     
     return new_cmap
+
+# -----------------------------------------------------------------------------
+def create_log_file( main_function, 
+                     main_args=(),
+                     file_name='log_file', 
+                     add2name='_log',
+                     convert_to_pdf=True ):
+    """"
+    Executes a given function and captures its stdout output, 
+    saving it to an HTML log file.
+    This function redirects the standard output to capture all print statements and 
+    matplotlib figures generated during the execution of the provided main_function. 
+    The captured output is then formatted into an HTML file, which includes the 
+    execution date and time, and saved with the specified file name.
+
+    Args:
+        - main_function (function): The main function to execute and capture output from.
+
+        - file_name (str, optional): The base name of the log file to create. 
+            Defaults to 'log_file'. If the provided file name 
+            does not have an '.html' extension, it will be replaced with '.html'.
+        
+        - add2name (str, optional): The string to append to the file name.
+        
+        - convert_to_pdf (bool, optional): 
+            Whether to convert the HTML log file to a PDF file.
+
+    Returns:
+        - str: The name of the created HTML log file.
+    """
+
+    base_name, ext = os.path.splitext( file_name )
+    base_name = base_name + add2name
+
+    # Replace the extension if it is different from .html
+    if ext != '.html':
+        out_file_name = base_name + '.html'
+    else:
+        out_file_name = base_name + ext
+
+    class DualOutput:
+        def __init__(self):
+            self.terminal = sys.stdout
+            self.buffer = io.StringIO()
+
+        def write(self, message):
+            self.terminal.write(message)
+            self.buffer.write(message)
+
+        def flush(self):
+            self.terminal.flush()
+
+        def add_figure(self, filename):
+            # Control image width via inline CSS
+            self.buffer.write(f'<img src="{filename}" alt="{filename}" style="max-width:640px; width:100%;">\n')
+
+    dual_output = DualOutput()
+    original_stdout = sys.stdout  # Keep track of the original stdout
+    sys.stdout = dual_output
+
+    original_savefig = plt.savefig
+    def savefig_wrapper(filename, *args, **kwargs):
+        dual_output.add_figure(filename)
+        original_savefig(filename, *args, **kwargs)
+
+    plt.savefig = savefig_wrapper
+
+    if type( main_args ) not in ( tuple, list ):
+        main_args = ( main_args, )
+    if len( main_args )== 0:
+        main_args = ()
+
+    try:
+        if main_args:
+            main_function(*main_args)  # Execute the main function with arguments
+        else:
+            main_function()  # Execute the main function without arguments
+    finally:
+        output = dual_output.buffer.getvalue()
+        sys.stdout = original_stdout  # Reset stdout
+        plt.savefig = original_savefig
+        current_datetime = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        html_content = f"""
+        <html>
+        <head><title>{file_name} Output</title></head>
+        <body>
+        <h1>{file_name} Output</h1>
+        <p>Generated on: {current_datetime}</p>
+        <pre>{output}</pre>
+        </body>
+        </html>
+        """
+        with open(out_file_name, "w") as file:
+            file.write(html_content)
+
+    if convert_to_pdf:
+        pdf_file_name = base_name + '.pdf'
+
+        try:
+            pdfkit.from_file(out_file_name, pdf_file_name)
+            out_file_name = pdf_file_name
+        
+        except Exception as e:
+            print(f"Error converting HTML to PDF: {e}")
+
+    return out_file_name

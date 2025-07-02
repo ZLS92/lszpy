@@ -6,22 +6,32 @@ Created on Thu Oct 24 17:26:35 2019
 """
 
 # -----------------------------------------------------------------------------
-import os
-mdir = os.path.dirname( os.path.abspath(__file__) ) 
+# Import libraries
+
+from . import utils as utl
+from . import shp_tools as shp
+
+# -----------------------------------------------------------------------------
+# Set the aliases for some libraries from the utils and other module
+
+np = utl.np
+os = utl.os
+sys = utl.sys
+ogr = utl.ogr
+osr = utl.osr
+gdal = utl.gdal
+plt = utl.plt
+time = utl.time
+copy = utl.copy
+
+# System path separator
 s = os.sep
 
-# import imp
-import numpy as np
-import scipy as sp
-import scipy.ndimage as ndimage
-from osgeo import gdal, ogr, osr, gdal_array
-import matplotlib.pyplot as plt
-from copy import copy
-import time
-import lszpy.utils as utl
-import lszpy.shp_tools as shp
 
-t=time.time
+# Enable exceptions
+gdal.UseExceptions()
+
+t = time.time
 
 # -----------------------------------------------------------------------------
 # Constants
@@ -32,6 +42,10 @@ c_wgs84 = utl.c_wgs84
 R_wgs84 = utl.R_wgs84
 J2_wgs84 = utl.J2_wgs84
 w_wgs84 = utl.w_wgs84
+
+# -----------------------------------------------------------------------------
+# Alias for the current directory (main dir.)
+mdir = os.path.dirname(os.path.abspath(__file__))
 
 # -----------------------------------------------------------------------------
 raster_globe = mdir +s+ 'gis' +s+ 'raster' +s+ 'raster_globe.tiff'
@@ -1353,7 +1367,7 @@ def raster_merge( raster_list,
             sigma = sigmab
             
         print( 'sigmab: ', sigma )
-        Z21 = ndimage.zoom( Z2, shape_ratio, order=1 )    
+        Z21 = utl.sp.ndimage.zoom( Z2, shape_ratio, order=1 )    
         
         mask1 = np.isfinite( Z1 )
         mask2 = np.isfinite( Z21 )
@@ -1367,9 +1381,9 @@ def raster_merge( raster_list,
         if res_ratio > 1 :
             Z21[ ~mask2 ] = 0 
             if res_ratio % 2 == 0 :
-                Z21 = ndimage.uniform_filter( Z21 , res_ratio+1 )
+                Z21 = utl.sp.ndimage.uniform_filter( Z21 , res_ratio+1 )
             else :
-                Z21 = ndimage.uniform_filter( Z21 , res_ratio )
+                Z21 = utl.sp.ndimage.uniform_filter( Z21 , res_ratio )
             Z21[ ~mask2 ] = np.nan 
         # ---  
         
@@ -1388,11 +1402,11 @@ def raster_merge( raster_list,
         D_21[ ~mask1a2 ] = np.nan
         D_21[ mask1n2 ] = Z1[ mask1n2 ]
         
-        mask3 = ~ndimage.gaussian_filter( ~mask1*1, sigma*2 ).astype(bool)
-        mask4 = ~ndimage.gaussian_filter( ~mask1*1, sigma ).astype(bool)
-        mask5 = ndimage.uniform_filter( mask1*1, 6 ).astype(bool)  
+        mask3 = ~utl.sp.ndimage.gaussian_filter( ~mask1*1, sigma*2 ).astype(bool)
+        mask4 = ~utl.sp.ndimage.gaussian_filter( ~mask1*1, sigma ).astype(bool)
+        mask5 = utl.sp.ndimage.uniform_filter( mask1*1, 6 ).astype(bool)  
         
-        weight = ndimage.gaussian_filter( mask4*1.0, sigma*2) 
+        weight = utl.sp.ndimage.gaussian_filter( mask4*1.0, sigma*2) 
         weight[ mask1n2 ] = 1
         D_21[ ~mask2  ] = np.nan
         
@@ -1401,13 +1415,13 @@ def raster_merge( raster_list,
         
         FG = np.copy( D_21fn )
         sign = np.sign( FG )
-        FG = ndimage.maximum_filter( np.abs(FG) , 3 )*sign
+        FG = utl.sp.ndimage.maximum_filter( np.abs(FG) , 3 )*sign
         FG[ mask1 ] = D_21fn[ mask1 ]
         
         for i in range( int( sigma*2 ) ) :   
-            FG1 = ndimage.uniform_filter( FG , 3 )
+            FG1 = utl.sp.ndimage.uniform_filter( FG , 3 )
             FG1[ mask5 ] = D_21fn[ mask5 ]
-            FG = ndimage.uniform_filter( FG1 , 3 )
+            FG = utl.sp.ndimage.uniform_filter( FG1 , 3 )
             FG[ mask4 ] = FG1[ mask4 ]
             FG[ mask1n2 ] = D_21fn[ mask1n2 ]
         
@@ -2496,16 +2510,24 @@ def add_coastline_band( raster, ply_coast, new_path, new_name ) :
     if shp_prjcode != rst_prjcode :
         lim_shp = utl.extend_lim( lim, 50, method='percentage')
         shp_ply = shp.translate( ply_coast, new_name=None, new_path='/vsimem/', 
-                                 lim=lim_shp, lim_prjcode=lim_prj)          
+                                 lim=lim_shp, lim_prjcode=lim_prj)
    
     if type(shp_ply) == str:    
         shp_ply = ogr.Open( shp_ply )  
     
-    lyr = shp_ply.GetLayer()   
-    tmp_mask = gdal.GetDriverByName('MEM').CreateCopy('', raster, 0)
-    tmp_mask.AddBand()
-    tmp_mask.GetRasterBand(2).Fill(1)
-    gdal.RasterizeLayer( tmp_mask, [2], lyr, burn_values=[ 0 ] )   
+    lyr = shp_ply.GetLayer()
+
+    dtype = raster.GetRasterBand(1).DataType
+    cols = raster.RasterXSize
+    rows = raster.RasterYSize
+
+    tmp_mask = gdal.GetDriverByName('MEM').Create('', cols, rows, 2, dtype)
+    tmp_mask.SetGeoTransform(raster.GetGeoTransform())
+    tmp_mask.SetProjection(raster.GetProjection())
+    data = raster.GetRasterBand(1).ReadRaster(0, 0, cols, rows)
+    tmp_mask.GetRasterBand(1).WriteRaster(0, 0, cols, rows, data)
+    tmp_mask.GetRasterBand(2).Fill(1.0)
+    gdal.RasterizeLayer( tmp_mask, [2], lyr, burn_values=[ 0 ] )
     new_path_name = new_path +os.sep+ new_name+ '.tif'
     new_raster = gdal.GetDriverByName( 'GTiff' ).CreateCopy( new_path_name, tmp_mask, 0 )
     
@@ -2571,7 +2593,7 @@ def del_local_datasets() :
         if type( gd[k] ) == gdal.Dataset :
             path_name = gd[k].GetDescription()
             gd[k] = None
-            path_names.append( path_name )               
+            path_names.append( path_name )
             
     return  path_names       
 

@@ -6,30 +6,37 @@ Created on Mon Dec  2 15:51:25 2019
 """
 
 # -----------------------------------------------------------------------------
-import os 
-mdir = os.path.dirname(os.path.abspath(__file__))
+# Import libraries
 
-import sys
-sys.path.insert(1, mdir)
+from . import utils as utl
+from . import shp_tools as shp
+from . import raster_tools as rt
+from . import grav_model as gm
 
-import numpy as np
-from osgeo import gdal
-#import warnings
 import harmonica as hm
 import multiprocessing as mpr
-import time
 import argparse
 import functools
 import platform
-import utils as utl
-import raster_tools as rt
-import lszpy.grav_model as gm
-import gc
-
-# Library used to plot meshes
 import matplotlib as mplt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-plt = mplt.pyplot
+
+# -----------------------------------------------------------------------------
+# Set the aliases for some libraries from the utils and other module
+
+np = utl.np
+os = utl.os
+sys = utl.sys
+ogr = utl.ogr
+osr = utl.osr
+gdal = utl.gdal
+plt = utl.plt
+time = utl.time
+copy = utl.copy
+
+# -----------------------------------------------------------------------------
+# Alias for the current directory (main dir.)
+mdir = os.path.dirname(os.path.abspath(__file__))
 
 # -----------------------------------------------------------------------------
 # Constants
@@ -106,7 +113,7 @@ def GrdStep2( R1, h, errg, gs=25, R=R_wgs84, dc=2670,
 
 # -----------------------------------------------------------------------------
 def Radi2(R1, h, errg, gs=100, Rmax=166735, R=R_wgs84, dc=2670, 
-          plot=False, xmax=None, ymax=None, font_size=14):    
+          plot=False, xmax=None, ymax=None, font_size=14):
     """
     Empirical estimate of the far-field R2 radius, starting from a distance 
     Rmax and calculating the grav. effect of a squared 3D-ring
@@ -187,13 +194,13 @@ def adj_mesh( gs1, R1, gs2, R2 ):
     to prevent overlapping or gaps between near and far field areas  
     """
     
-    R1n = ( round( R1 / gs1 ) * gs1 ) +  ( gs1 / 2 )
-    
-    # _, gs2n = np.linspace( -R1n, R1n, int( 2 * R1n / gs2 ), retstep=True )
-    gs2n = R1n / round( R1n / gs2 )
-    
-    R2n = round( ( R2-R1n ) / gs2n ) * gs2n + R1n
-    # R2n = ( round( R2 / gs2n ) * gs2n ) +  ( gs2n / 2 )
+    R1n = ( round( R1 / gs1 ) * gs1 ) + ( gs1 / 2 )
+
+    k = round( 2 * R1n / gs2 )
+    if k % 2 == 0 :
+        k -= 1
+    gs2n = 2 * R1n / k
+    R2n = ( round( R2 / gs2n ) * gs2n ) + ( gs2n / 2 )
     
     return gs1, R1n, gs2n, R2n  
 
@@ -237,76 +244,35 @@ def mesh_xyz( x, y, R1, R2, gs1, gs2, dtm1, dtm2, st_num=0, z=9999,
     Mx = lon. of elements borders
     My = lat. of elements borders
     Zc = heght of elemrnts centre
-    hst = dtm height of the central point                                         
+    hst = dtm height of the central point
     """
-
+    
     # Set reference codes obgect for coordinates transformation ---------------
-    if prjcode_m == None : 
+    if prjcode_m is None:
         prjcode_m = f'+proj=ortho +lat_0={y} +lon_0={x} +ellps=sphere +R={R}'
     xm, ym = utl.prjxy( prjcode_in, prjcode_m, x, y ) # metric coordinates
-
+    
     r_val = rt.xy2rasterVal( dtm1, x, y, prjcode=prjcode_in, close=False )[0]
     
     # Adjust mesh borders and step2 to prevent overlapping or gaps between near 
     # and far field     
     if adjust_mesh == True : 
         gs1, R1, gs2, R2 = adj_mesh( gs1, R1, gs2, R2 )  
-     
-    # Near field lat lon vectors (meter units) --------------------------------
-    lon_mesh1 = np.arange( -R1, R1 + 0.001, gs1 )
-    lat_mesh1 = lon_mesh1     
-
-    # Far field lat lon vectors (meter units) ---------------------------------
-    lon_mesh2 = np.arange(-R2, R2 + 0.001, gs2)
-    lat_mesh2 = lon_mesh2
     
     # Near field lat lon grid -------------------------------------------------
-    Mx_1m, My_1m = np.meshgrid( lon_mesh1, lat_mesh1 ) # borders coordinates [m]
-    lim1 = [ lon_mesh1[0]+xm, lon_mesh1[-1]+xm, lat_mesh1[0]+ym, lat_mesh1[-1]+ym ]
-
-    # cmd1 = 'python '+mdir+os.sep+'raster2array.py'
-    # cmd1 += f' --raster {rt.raster_description(dtm1)}'
-    # cmd1 += f' --lim {lim1[0]} {lim1[1]} {lim1[2]} {lim1[3]}'
-    # cmd1 += f' --method GRA_Average'
-    # cmd1 += f' --width {Mx_1m.shape[0] - 1}'
-    # cmd1 += f' --height {My_1m.shape[1] - 1}'
-    # cmd1 += f" --lim_prjcode '{prjcode_m}'"
-    # cmd1 += f" --out_prjcode '{prjcode_m}'"
-    # cmd1 += f" --new_name 'mesh_dtm1_{int(st_num)}'"
-    # cmd1 += f" --new_path '{rt.raster_path(dtm1)}'"
-    # cmd1 += f" --warp True"
-    # # print(cmd1)
-    # os.system(cmd1)
-    # band11 = rt.raster_path(dtm1) +os.sep+ 'mesh_dtm1_' + str( int( st_num ) )+'_band_1'+ '.npy'
-    # band12 = rt.raster_path(dtm1) +os.sep+ 'mesh_dtm1_' + str( int( st_num ) )+'_band_2'+ '.npy'
-    # Zc1 = np.load( band11 )
-    # if os.path.exists( band12 ) :
-    #     msk1 = np.load( band12 )    
-
+    lim1 = [ -R1, R1, -R1, R1 ] # borders coordinates [m]
     dtm1m = rt.raster_warp( dtm1, 
-                            lim1, 
+                            lim = lim1, 
                             method = gdal.GRA_Average, 
-                            width = Mx_1m.shape[0] - 1, 
-                            height = My_1m.shape[1] - 1, 
+                            width = int( R1*2/gs1 ), 
+                            height = int( R1*2/gs1 ), 
                             out_prjcode = prjcode_m, 
                             lim_prjcode = prjcode_m, 
                             new_name = 'mesh_dtm1_' + str( int( st_num ) ),
-                            extension = 'vrt',
-                            return_array = True  ) 
-
-    Zc1 = np.flipud( dtm1m[0] ) # elevetion grid [m]
-    if len(dtm1m) == 2 :
-        msk1 = np.round( np.flipud( dtm1m[1] ) ).astype(int)
-
-    # dtm1m = rt.gdal.Open( rt.raster_path(dtm1) +os.sep+ 'mesh_dtm1_' + str( int( st_num ) ) + '.asc' )
+                            new_path = None,
+                            extension = 'tif' ) 
     
-    # Zc1 = np.flipud( dtm1m.GetRasterBand(1).ReadAsArray() ) # elevetion grid [m]
-    
-    # if dtm1m.RasterCount == 2 :
-    #     msk1 = np.round( np.flipud( dtm1m.GetRasterBand(2).ReadAsArray() ) )
-    # else: 
-    #     msk1 = None    
-
+    Zc1 = np.flipud( dtm1m.GetRasterBand(1).ReadAsArray() ) # elevetion grid [m]
     cpx = int( ( Zc1.shape[0] + 1 ) / 2 ) 
     
     # dtm station height ------------------------------------------------------
@@ -314,53 +280,37 @@ def mesh_xyz( x, y, R1, R2, gs1, gs2, dtm1, dtm2, st_num=0, z=9999,
          Zc1[cpx, cpx] = z 
     else :
          Zc1[cpx, cpx] = r_val
-
+    
+    if dtm1m.RasterCount == 2 :
+        msk1 = np.round( np.flipud( dtm1m.GetRasterBand(2).ReadAsArray() ) )
+    else: 
+        msk1 = None    
+    
     # Far field lat lon grid --------------------------------------------------
-    Mx_2m, My_2m = np.meshgrid( lon_mesh2, lat_mesh2 ) # borders coordinates [m]
-    lim2 = [ lon_mesh2[0]+xm, lon_mesh2[-1]+xm, lat_mesh2[0]+ym, lat_mesh2[-1]+ym ]
-
-
-    # cmd2 = 'python '+mdir+os.sep+'raster2array.py'
-    # cmd2 += f' --raster {rt.raster_description(dtm2)}'
-    # cmd2 += f' --lim {lim2[0]} {lim2[1]} {lim2[2]} {lim2[3]}'
-    # cmd2 += f' --method GRA_Average'
-    # cmd2 += f' --width {Mx_2m.shape[0] - 1}'
-    # cmd2 += f' --height {My_2m.shape[1] - 1}'
-    # cmd2 += f" --lim_prjcode '{prjcode_m}'"
-    # cmd2 += f" --out_prjcode '{prjcode_m}'"
-    # cmd2 += f" --new_name 'mesh_dtm2_{int(st_num)}'"
-    # cmd2 += f" --new_path '{rt.raster_path(dtm2)}'"
-    # cmd2 += f" --warp True"
-    # os.system(cmd2)    
-    # band21 = rt.raster_path(dtm2) +os.sep+ 'mesh_dtm2_' + str( int( st_num ) )+'_band_1'+ '.npy'
-    # band22 = rt.raster_path(dtm2) +os.sep+ 'mesh_dtm2_' + str( int( st_num ) )+'_band_2'+ '.npy'
-    # Zc2 = np.load( band21 )
-    # if os.path.exists( band22 ) :
-    #     msk2 = np.load( band22 )
-
+    lim2 = [ -R2, R2, -R2, R2 ] # borders coordinates [m]
     dtm2m = rt.raster_warp( dtm2, 
-                            lim2, 
+                            lim = lim2, 
                             method = gdal.GRA_Average,
-                            width = Mx_2m.shape[0] - 1, 
-                            height = My_2m.shape[1] - 1, 
+                            width = int( R2*2/gs2 ), 
+                            height = int( R2*2/gs2 ), 
                             out_prjcode = prjcode_m, 
                             lim_prjcode = prjcode_m, 
                             new_name = 'mesh_dtm2_' + str( int( st_num ) ),
-                            extension = 'vrt',
-                            return_array = True  )
+                            new_path = None, 
+                            extension = 'tif' )
+    Zc2 =  np.flipud( dtm2m.GetRasterBand(1).ReadAsArray() ) # elevetion grid [m]
 
-    Zc2 = np.flipud( dtm2m[0] ) # elevetion grid [m]
-    if len(dtm2m) == 2 :
-        msk2 = np.round( np.flipud( dtm2m[1] ) ).astype(int)
+    grid1 = np.linspace( -R1, R1, int( R1*2/gs1 ) + 1 )
+    # grid1 = np.arange( -R1, R1, gs1 )
+    grid2 = np.linspace( -R2, R2, int( R2*2/gs2 ) + 1 )
+    # grid2 = np.arange( -R2, R2, gs2 )
+    Mx_1m, My_1m = np.meshgrid( grid1, grid1 ) # near field mesh
+    Mx_2m, My_2m = np.meshgrid( grid2, grid2 ) # far field mesh
 
-    # dtm2m = rt.gdal.Open( rt.raster_path(dtm2) +os.sep+ 'mesh_dtm2_' + str( int( st_num ) ) + '.asc' )
-
-    # Zc2 =  np.flipud( dtm2m.GetRasterBand(1).ReadAsArray() ) # elevetion grid [m] 
-
-    # if dtm2m.RasterCount == 2 :
-    #     msk2 = np.round( np.flipud( dtm2m.GetRasterBand(2).ReadAsArray() ) )
-    # else: 
-    #     msk2 = None         
+    if dtm2m.RasterCount == 2 :
+        msk2 = np.round( np.flipud( dtm2m.GetRasterBand(2).ReadAsArray() ) )
+    else: 
+        msk2 = None
   
     # Plot mesh ---------------------------------------------------------------
     if plot is not None:
@@ -379,7 +329,7 @@ def mesh_xyz( x, y, R1, R2, gs1, gs2, dtm1, dtm2, st_num=0, z=9999,
             plot_1, plot_2, n = True, True, 1
             
         if plot_1 == True:
-            p1 = plt.subplot( 1, 1 + n, 1 )
+            p1 = plt.subplot( 1, 1 + n, 1 )            
             for i in range( Mx_2m.shape[1] ) :
                 p1.plot( Mx_2m[:,i], My_2m[:,i], c='k' )
             for i in range( Mx_2m.shape[0] ) :
@@ -387,9 +337,9 @@ def mesh_xyz( x, y, R1, R2, gs1, gs2, dtm1, dtm2, st_num=0, z=9999,
             Mxc, Myc = Mx_2m[ 1:, 1:] - gs2/2, My_2m[ 1:, 1: ] - gs2/2 # conrdinates of prism's center (array)
             p1.scatter( Mxc, Myc, c='b', marker='o' )
             rect = mplt.patches.Rectangle( ( Mx_1m.min(), My_1m.min()),
-                                           ( Mx_1m.shape[1]-1)*gs1, (Mx_1m.shape[0]-1)*gs1,
-                                             linewidth=1, edgecolor='k', facecolor='w',
-                                             zorder=2 )
+                                      (Mx_1m.shape[1]-1)*gs1, (Mx_1m.shape[0]-1)*gs1,
+                                      linewidth=1, edgecolor='k', facecolor='w',
+                                      zorder=2 )
             p1.add_patch( rect )
             for i in range( Mx_1m.shape[1] ) :
                 p1.plot( Mx_1m[:,i], My_1m[:,i], c='k' )
@@ -438,26 +388,17 @@ def mesh_xyz( x, y, R1, R2, gs1, gs2, dtm1, dtm2, st_num=0, z=9999,
         plt.tight_layout()
     # -------------------------------------------------------------------------
     # Remove temporary gdal .vrt files (from both python RAM and disk memory)
-
-    # dtm1m_path_name = dtm1m.GetDescription()
-    # dtm2m_path_name = dtm2m.GetDescription()
-    # dtm1m.FlushCache()
-    # dtm2m.FlushCache()
-    # os.remove(dtm1m_path_name)
-    # os.remove(dtm2m_path_name)
-    # dtm1m = None
-    # dtm2m = None
-    # os.remove( band11 )
-    # os.remove( band12 )
-    # os.remove( band21 )
-    # os.remove( band22 )
-    # os.remove( rt.raster_path(dtm1) +os.sep+ 'mesh_dtm1_' + str( int( st_num ) ) + '.vrt' )
-    # os.remove( rt.raster_path(dtm2) +os.sep+ 'mesh_dtm2_' + str( int( st_num ) ) + '.vrt' )
-
+    dtm1m_path_name = dtm1m.GetDescription()
+    dtm2m_path_name = dtm2m.GetDescription()
+    dtm1m = None 
+    dtm2m = None
+    os.remove( dtm1m_path_name )
+    os.remove( dtm2m_path_name )
+    
     # -------------------------------------------------------------------------
     # return   
     return ( Mx_1m, Mx_2m ), ( My_1m, My_2m ), ( Zc1, Zc2 ), ( msk1, msk2 )
-
+   
 # -----------------------------------------------------------------------------
 def mesh_ls( Mx, My, Zc, msk=None, R1=None, R=R_wgs84, dc=2670, dw=1030, z_shift=True ) :
     """
@@ -476,7 +417,7 @@ def mesh_ls( Mx, My, Zc, msk=None, R1=None, R=R_wgs84, dc=2670, dw=1030, z_shift
         Indx = Zc == Zc 
     
     Me, Mw = Mxc-dhx, Mxc+dhx
-    Ms, Mn = Myc-dhy, Myc+dhy      
+    Ms, Mn = Myc-dhy, Myc+dhy
 
     Z_pos = ( Zc > 0 ) & Indx
     Z_neg = ( Zc < 0 ) & Indx	
@@ -485,7 +426,7 @@ def mesh_ls( Mx, My, Zc, msk=None, R1=None, R=R_wgs84, dc=2670, dw=1030, z_shift
     if msk is not None : # with coastline mask array
         IA = ( msk == 0 ) & Indx
         IB = ( msk == 1 ) & Indx
-    if msk is None : # without coastline array mask           
+    if msk is None : # without coastline array mask
         IA = Z_pos
         IB = Z_neg	
     # Bottom 
@@ -532,126 +473,6 @@ def mesh_ls( Mx, My, Zc, msk=None, R1=None, R=R_wgs84, dc=2670, dw=1030, z_shift
 
     return m, d
 
-## -----------------------------------------------------------------------------
-#def mesh_sb(Mx, My, Zc, hst, msk=None, R1=None, dc=2670, dw=1030, z_shift=True, R=R_wgs84):
-#    """
-#    Crate prism mesh_array valid for sea-bottom stations.
-#    hst = station depth (negative)
-#    R1 = limit between near and far field
-#    R = earth radius (spherical approximation)
-#    dc, dw = water and crustal densities
-#    """  
-#      
-#    dhx, dhy = np.mean( np.diff( Mx ) ) / 2, np.mean( np.diff( My, axis=0 ) ) / 2
-#    Mxc, Myc = Mx[ 1:, 1: ] - dhx, My[ 1:, 1: ] - dhy # center prism coordinates (array)  
-#    
-#    if R1!=None:
-#        Indx = ( Mxc < -R1 ) | ( Mxc > R1 ) | ( Myc < -R1 ) | ( Myc > R1 )
-#    else: 
-#        Indx = Zc == Zc # i.e. all array == True
-#    
-##    Zc[ int(Zc.shape[0]/2)+1, int(Zc.shape[1]/2)+1 ] = hst
-#    
-#    Me, Mw = Mxc-dhx, Mxc+dhx
-#    Ms, Mn = Myc-dhy, Myc+dhy 
-#
-#    # (A,B,C) compartment sorting ---------------------------------------------    
-#    if msk is not None : # with coastline mask array    
-#        IA = ( msk == 0 ) & Indx
-#        IB = ( Zc > hst ) & ( msk == 1 ) & Indx
-#        IC = ( Zc < hst ) & ( msk == 1 ) & Indx  
-#    if msk is None : # with coastline mask array    
-#        IA = ( Zc > 0 ) & Indx
-#        IB = ( Zc > hst ) & ( Zc < 0 ) & Indx
-#        IC = ( Zc < hst ) & ( Zc < 0 ) & Indx          
-#    # Bottom 
-#    MbA, MbB1, MbB2, MbC1, MbC2 = np.copy(Zc), np.copy(Zc), np.copy(Zc), np.copy(Zc), np.copy(Zc)
-#    # Top
-#    MtA, MtB1, MtB2, MtC1, MtC2 = np.copy(Zc), np.copy(Zc), np.copy(Zc), np.copy(Zc), np.copy(Zc)
-#    
-#    MbA[IA],  MtA[IA] = hst, MtA[IA]    # compartment A (from hst to hdtm, where hdtm > 0)
-#    MbB1[IB], MtB1[IB] = hst, MtB1[IB]  # compartment B1 (from hst to hdtm, where hst < hdtm < 0)
-#    MbB2[IB], MtB2[IB] = MbB2[IB], 0    # compartment B2 (from hdtm to 0, where hst < hdtm < 0)
-#    MbC1[IC], MtC1[IC] = MbC1[IC], hst  # compartment C1 (from hdtm to hst, where hdtm < hst < 0)
-#    MbC2[IC], MtC2[IC] = hst, 0         # compartment C2 (from hst to 0, where hdtm < hst < 0)     
-#    
-#    # desnsity array  
-#    DA = np.full( Zc.shape, dc ) 
-#    DB1 = np.full( Zc.shape, dc )
-#    DB2 = np.full( Zc.shape, dw )
-#    DC1 = np.full( Zc.shape, -dc + dw )
-#    DC2 = np.full( Zc.shape, dw )
-#    
-#    # z_shift (curvature correction of prisms) --------------------------------
-#    if z_shift==True:
-#        Mxb, Myb = np.copy( Mxc ), np.copy( Myc )
-#        Mxb[Mxb<0], Myb[Myb<0] = Mxb[Mxb<0] - dhx, Myb[Myb<0] - dhy
-#        Mxb[Mxb>0], Myb[Myb>0] = Mxb[Mxb>0] + dhx, Myb[Myb>0] + dhy
-#        Mxy2 = Mxb**2 + Myb**2
-#        Zsh = Mxy2 / ( 2 * R )
-#        MbA, MtA = MbA - Zsh, MtA - Zsh
-#        MbB1, MtB1 = MbB1 - Zsh, MtB1 - Zsh
-#        MbB2, MtB2 = MbB2 - Zsh, MtB2 - Zsh
-#        MbC1, MtC1 = MbC1 - Zsh, MtC1 - Zsh
-#        MbC2, MtC2 = MbC2 - Zsh, MtC2 - Zsh
-#        
-#    ma = np.column_stack(( Me[IA].ravel(),  Mw[IA].ravel(),
-#                           Ms[IA].ravel(),  Mn[IA].ravel(),
-#                          MbA[IA].ravel(), MtA[IA].ravel() ))
-#    
-#    mb1 = np.column_stack((  Me[IB].ravel(),   Mw[IB].ravel(),
-#                             Ms[IB].ravel(),   Mn[IB].ravel(),
-#                           MbB1[IB].ravel(), MtB1[IB].ravel() )) 
-#    
-#    mb2 = np.column_stack((  Me[IB].ravel(),   Mw[IB].ravel(),
-#                             Ms[IB].ravel(),   Mn[IB].ravel(),
-#                           MbB2[IB].ravel(), MtB2[IB].ravel() )) 
-#    
-#    mc1 = np.column_stack((  Me[IC].ravel(),   Mw[IC].ravel(),
-#                             Ms[IC].ravel(),   Mn[IC].ravel(),
-#                           MbC1[IC].ravel(), MtC1[IC].ravel() ))
-#    
-#    mc2 = np.column_stack((  Me[IC].ravel(),   Mw[IC].ravel(),
-#                             Ms[IC].ravel(),   Mn[IC].ravel(),
-#                           MbC2[IC].ravel(), MtC2[IC].ravel() ))  
-#    
-#    m = np.vstack( ( ma, mb1, mb2, mc1, mc2 ) )
-#    d = np.hstack( ( DA[IA].ravel(),
-#                     DB1[IB].ravel(),
-#                     DB2[IB].ravel(),
-#                     DC1[IC].ravel(),
-#                     DC2[IC].ravel() ) )
-#    
-#    m = np.vstack( ( ma, mb1, mb2, mc1, mc2 ) )
-#    d = np.hstack( ( DA[IA].ravel(),
-#                     DB1[IB].ravel(),
-#                     DB2[IB].ravel(),
-#                     DC1[IC].ravel(),
-#                     DC2[IC].ravel() ) )
-##    if R1 == None :
-##        with np.printoptions(threshold=np.inf):
-###            print(ma[:,[4,5]]) 
-##            print(mb1[:,[4,5]]) 
-##            print(mb2[:,[4,5]]) 
-##            print(mc1[:,[4,5]]) 
-##            print(mc2[:,[4,5]]) 
-###        with np.printoptions(threshold=np.inf):
-###            print(d)         
-#    
-#    # invert top-bottom if bottom > top
-##    inv_tb = m[:,4] > m[:,5]
-##    top_new = np.copy( m[:,4] )
-##    m[ inv_tb, 4 ] = m[ inv_tb, 5 ]  
-##    m[ inv_tb , 5 ] = top_new[ inv_tb ]  
-#    
-#    # Delete far field thin elements
-#    if R1 is not None :
-#        zero_h = np.abs( m[:,5] - m[:,4] ) < 0.5
-#        m = m[ ~zero_h ]
-#        d = d[ ~zero_h ]    
-#    
-#    return m, d 
-
 # -----------------------------------------------------------------------------
 def mesh_sb(Mx, My, Zc, hst, msk=None, R1=None, dc=2670, dw=1030, z_shift=True, R=R_wgs84):
     """
@@ -675,8 +496,7 @@ def mesh_sb(Mx, My, Zc, hst, msk=None, R1=None, dc=2670, dw=1030, z_shift=True, 
     Me, Mw = Mxc-dhx, Mxc+dhx
     Ms, Mn = Myc-dhy, Myc+dhy 
 
-    # (A,B,C) compartment sorting ---------------------------------------------
-
+    # (A,B,C) compartment sorting ---------------------------------------------    
     if msk is not None : # with coastline mask array    
         IA = ( msk == 0 ) & Indx
         IB = ( Zc > hst ) & ( msk == 1 ) & Indx
@@ -684,12 +504,10 @@ def mesh_sb(Mx, My, Zc, hst, msk=None, R1=None, dc=2670, dw=1030, z_shift=True, 
     if msk is None : # with coastline mask array    
         IA = ( Zc > 0 ) & Indx
         IB = ( Zc > hst ) & ( Zc < 0 ) & Indx
-        IC = ( Zc < hst ) & ( Zc < 0 ) & Indx
-
-    # Prisms bottom 
+        IC = ( Zc < hst ) & ( Zc < 0 ) & Indx          
+    # Bottom 
     MbA1, MbA2, MbB1, MbC1 = np.copy(Zc), np.copy(Zc), np.copy(Zc), np.copy(Zc)
-
-    # Prisms top
+    # Top
     MtA1, MtA2, MtB1, MtC1 = np.copy(Zc), np.copy(Zc), np.copy(Zc), np.copy(Zc)
     
     MbA1[IA],  MtA1[IA] = hst, 0    # compartment A (from hst to hdtm, where hdtm > 0)
@@ -697,7 +515,7 @@ def mesh_sb(Mx, My, Zc, hst, msk=None, R1=None, dc=2670, dw=1030, z_shift=True, 
     MbB1[IB], MtB1[IB] = hst, MtB1[IB]  # compartment B1 (from hst to hdtm, where hst < hdtm < 0)
     MbC1[IC], MtC1[IC] = MbC1[IC], hst  # compartment C1 (from hdtm to hst, where hdtm < hst < 0)
     
-    # Prisms desnsity
+    # desnsity array  
     DA1 = np.full( Zc.shape, dc-dw ) 
     DA2 = np.full( Zc.shape, dc ) 
     DB1 = np.full( Zc.shape, dc )
@@ -742,21 +560,6 @@ def mesh_sb(Mx, My, Zc, hst, msk=None, R1=None, dc=2670, dw=1030, z_shift=True, 
                      DA2[IA].ravel(),
                      DB1[IB].ravel(),
                      DC1[IC].ravel() ) )
-#    if R1 == None :
-#        with np.printoptions(threshold=np.inf):
-##            print(ma[:,[4,5]]) 
-#            print(mb1[:,[4,5]]) 
-#            print(mb2[:,[4,5]]) 
-#            print(mc1[:,[4,5]]) 
-#            print(mc2[:,[4,5]]) 
-##        with np.printoptions(threshold=np.inf):
-##            print(d)         
-    
-    # invert top-bottom if bottom > top
-#    inv_tb = m[:,4] > m[:,5]
-#    top_new = np.copy( m[:,4] )
-#    m[ inv_tb, 4 ] = m[ inv_tb, 5 ]  
-#    m[ inv_tb , 5 ] = top_new[ inv_tb ]  
     
     # Delete far field thin elements
     if R1 is not None :
@@ -767,11 +570,11 @@ def mesh_sb(Mx, My, Zc, hst, msk=None, R1=None, dc=2670, dw=1030, z_shift=True, 
     return m, d 
 
 # -----------------------------------------------------------------------------   
-def st_loop(constant_arg, iterable_arg):
+def st_loop( constant_arg, iterable_arg ) :  
     
     # Split constant arguments ------------------------------------------------
     R1, R2, R3, gs1, gs2, dtm1, dtm2, prjcode_g, tess, R, dc, dw, disable_checks, tot_len, \
-    adjust_dtm, output_file = constant_arg
+    adjust_dtm, output_file, z_shift, prjcode_m = constant_arg
     
     # Split iterables arguments -----------------------------------------------     
     xg = iterable_arg[0]
@@ -786,14 +589,12 @@ def st_loop(constant_arg, iterable_arg):
     st_num = int(st_num.item())
     R = utl.local_sph_raduis(yg)
 
-    dtm1m = utl.copy.copy(dtm1)
-    dtm2m = utl.copy.copy(dtm2)
-    # Create mesh ( m1 = Near_Field, m2 = Far_Field ) -------------------------      
-    Mx, My, Zc, msk = mesh_xyz( xg, yg, R1, R2, gs1, gs2, 
-                                dtm1m, dtm2m, st_num=st_num,
-                                z=z, prjcode_in=prjcode_g, 
-                                adjust_dtm=adjust_dtm, R=R, plot=None)
-                                
+    # Create mesh ( m1 = Near_Field, m2 = Far_Field ) -------------------------
+    prjcode_m = f'+proj=ortho +lon_0={xg} +lat_0={yg} +ellps=sphere +R={R}'
+    Mx, My, Zc, msk = mesh_xyz( xg, yg, R1, R2, gs1, gs2, dtm1, dtm2, st_num=st_num,
+                                z=z, prjcode_in=prjcode_g, adjust_dtm=adjust_dtm, 
+                                R=R, prjcode_m=None, plot=None )
+                         
     # If the station is on the sea surface, zs is set to 0
     # i.e. computational point attached to the prism's top
     if st_type == 1:
@@ -802,71 +603,94 @@ def st_loop(constant_arg, iterable_arg):
     # Store mesh elements in two arry ( near-field( pr1 ), ( far-field( pr2 ) )
     
     if ( st_type == 0 ) or ( st_type == 1 ) :
-        pr1 = mesh_ls( Mx[0], My[0], Zc[0], msk[0], R=R, dc=dc, dw=dw, z_shift=True )
-        if tess == True :
-            pr2 = mesh_ls( Mx[1], My[1], Zc[1], msk[1], R1=R1, R=R, dc=dc, dw=dw, z_shift=False )
+        pr1 = mesh_ls( Mx[0], My[0], Zc[0], msk[0], R=R, dc=dc, dw=dw, z_shift=z_shift )
+        if tess is False :
+            pr2 = mesh_ls( Mx[1], My[1], Zc[1], msk[1], R1=R1, R=R, dc=dc, dw=dw, z_shift=z_shift )
         else :
-            pr2 = mesh_ls( Mx[1], My[1], Zc[1], msk[1], R1=R1, R=R, dc=dc, dw=dw, z_shift=True )
+            pr2 = mesh_ls( Mx[1], My[1], Zc[1], msk[1], R1=R1, R=R, dc=dc, dw=dw, z_shift=False )
     
     if st_type == 2 :
-        pr1 = mesh_sb( Mx[0], My[0], Zc[0], hst=z, msk=msk[0], R=R, dc=dc, dw=dw, z_shift=True )
-        if tess == True :
+        pr1 = mesh_sb( Mx[0], My[0], Zc[0], hst=z, msk=msk[0], R=R, dc=dc, dw=dw, 
+            z_shift=z_shift )
+        if tess == False :
             pr2 = mesh_sb( Mx[1], My[1], Zc[1], hst=z, msk=msk[1], R1=R1, R=R, dc=dc, dw=dw, 
-                           z_shift=False )  
+                z_shift=z_shift ) 
         else :
             pr2 = mesh_sb( Mx[1], My[1], Zc[1], hst=z, msk=msk[1], R1=R1, R=R, dc=dc, dw=dw, 
-                           z_shift=True )  
+                z_shift=False ) 
        
     if R3 != None :
-        pr2, pr3 = mesh_R3( pr2, R3 )     
+        pr2, pr3 = mesh_R3( pr2, R3 )
     
-    # Coordinates of computational point (center of the mesh) 
+    # Coordinates of computational point (center of the mesh)
     st = [0, 0, z]
     
-    # Calculate z_gravity of prisms at station point (st) ---------------------
+    # Calculate z_gravity of prisms at station point (st) ---------------------   
     
-    prjcode_m = f'+proj=ortho +lon_0=0 +lat_0=0 +ellps=sphere +R={R}'
+    if prjcode_m is None : 
+        prjcode_m = f'+proj=ortho +lon_0=0 +lat_0=0 +ellps=sphere +R={R}'
     
-    te_near = hm.prism_gravity( st, pr1[0], density=pr1[1], field="g_z", 
-                                disable_checks=disable_checks )
-    
+    # te_near = hm.prism_gravity( st, pr1[0], density=pr1[1], field="g_z", 
+    #                             disable_checks=disable_checks )
+    nag_near = gm.nagy( st, pr1[0], density=pr1[1] )
+    te_near = nag_near.gz()
+
+    # xpt = np.concatenate( ( pr1[0][:,0], pr1[0][:,1] ) )
+    # ypt = np.concatenate( ( pr1[0][:,2], pr1[0][:,3] ) )
+    # shp.write_points( x=xpt, y=ypt, prj_code=prjcode_m, name='orhto_prism', path=mdir )
+
     if tess == True :
+        
+        # xpt = np.concatenate( ( pr2[0][:,0], pr2[0][:,1] ) )
+        # ypt = np.concatenate( ( pr2[0][:,2], pr2[0][:,3] ) )
+        # shp.write_points( x=xpt, y=ypt, prj_code=prjcode_m, name='orhto_tess', path=mdir )
+        
         pr2[0][:,0], pr2[0][:,2] = utl.prjxy( prjcode_m, prjcode_g, pr2[0][:,0], pr2[0][:,2] )
         pr2[0][:,1], pr2[0][:,3] = utl.prjxy( prjcode_m, prjcode_g, pr2[0][:,1], pr2[0][:,3] )  
         pr2[0][:,4], pr2[0][:,5] = pr2[0][:,4] + R, pr2[0][:,5] + R 
+        te_far = hm.tesseroid_gravity( [ xg, yg, R+z ], pr2[0], density=pr2[1], field="g_z",
+            disable_checks=True )
         
-        te_far = hm.tesseroid_gravity( [0, 0, R+z], pr2[0], density=pr2[1], field="g_z", 
-                                       disable_checks=disable_checks )
-        
+        # xpt = np.concatenate( ( pr2[0][:,0], pr2[0][:,1] ) )
+        # ypt = np.concatenate( ( pr2[0][:,2], pr2[0][:,3] ) )
+        # shp.write_points( x=xpt, y=ypt, prj_code=prjcode_g, name='geo_tess', path=mdir )
+
     else :
-        te_far = hm.prism_gravity( st, pr2[0], density=pr2[1], field="g_z", 
-                                   disable_checks=disable_checks )
-        
+        # te_far = hm.prism_gravity( st, pr2[0], density=pr2[1], field="g_z", 
+        #                            disable_checks=disable_checks )
+        nag_far = gm.nagy( st, pr2[0], density=pr2[1] )
+        te_far = nag_far.gz()
+
     if R3 != None :
         pr3[0][2,:] = pr3[0][2,:] + R 
         pr3[0][0,:], pr3[0][1,:] = utl.prjxy( prjcode_m, prjcode_g, pr3[0][0,:], pr3[0][1,:] )
-        
-        te_far_p = hm.point_gravity( [0, 0, R+z], pr3[0], pr3[1], 'g_z', 
-                                          coordinate_system='spherical')    
-        te_far = te_far + te_far_p
-        
-    # Sum near and far grav. effects
-    te = te_near + te_far      
-    
-    # f = open(output_file, 'a+')
-        
-    line = "% 10d % 10f % 10f % 10.2f % 10.2f % 10.4f % 10.4f % 10.4f % 10d\n" % ( 
-            st_num, np.round(xg, 6), np.round(yg, 6), np.round(z, 3), np.round(zdtm, 3),
-            np.round(te_near, 3), np.round(te_far, 3), np.round(te, 3), st_type)
-        
-    # f.write( line )
-    
-    # f.seek(0)
-    # n_lines = sum(1 for line in f) - 6
-    print( line )
-        
-    # f.close()
 
+        te_far_p = hm.point_mass_gravity( [0, 0, R+z], pr3[0], pr3[1], 'g_z', 
+            coordinate_system='spherical')
+        te_far = te_far + te_far_p
+
+    # Sum near and far grav. effects
+    te = te_near + te_far
+
+    with open(output_file, 'a+') as f:
+        
+        line = "% 10d % 10f % 10f % 10.2f % 10.2f % 10.5f % 10.5f % 10.5f % 10d\n" % ( 
+               st_num, np.round(xg, 6), np.round(yg, 6), np.round(z, 3), np.round(zdtm, 3),
+               np.round(te_near, 6), np.round(te_far, 6), np.round(te, 6), st_type)
+        
+        f.write( line )
+        
+        f.seek(0)
+        n_lines = sum(1 for line in f) - 6
+        progress = str( round( 100 * n_lines / tot_len, 2 ) )
+        print_line = line[:-1]+'  '+progress+' % \n'
+        print( print_line )
+        
+        f.close() 
+
+    pr1 = None
+    pr2 = None
+     
     # Return
     return te, te_near, te_far, z, st_num, pr1, pr2
 
@@ -875,14 +699,14 @@ def te( x, y, dtm1, z='dtm', gs1=None, dtm2=None, R1=None, R2=None, gs2=None,
         errg=0.5, herr=5, dc=2670, dw=1030, R=R_wgs84, prjcode_in=4326, tess=True,
         prjcode_m=None, st_type=0, plot=None, output_file='Te_correction', 
         disable_checks=True, cpu=1, ply_coast=None, new_dtm=False, adjust_dtm=False,
-        R3=50000, add2outname='' ):
+        R3=50000, z_shift=True ):
     """
     Calculate topo.effect using Prisms for the Near_field and Prism/Tesseroid for the Far_Field
     adding a "z_shift" to account for earth's curature when using Prisms.
     (Harmonica modules to compute prisms and tesseroids grav.effect).
     
     INPUT:
-    x,y,z ----->  coordinates of computational points (z can be as x,y or just a sigle value or z='dtm' )
+    x,y,z ----->  coordinates of computational points (z can be as x,y or just a sigle value or z='dtm')
     gs1, gs2 --> grid-step of near&far field mesh (if gs2=None, gs2 is empirically calculated)
     dtm1, dtm2 > gdal dataset objects (DTM) of 1near&2far field (if dtm2=None, dtm2=dtm1)
     prjcode_in > input projection coordinate code from proj library eg.'epsg:4326' or even 4326 as integer
@@ -898,19 +722,13 @@ def te( x, y, dtm1, z='dtm', gs1=None, dtm2=None, R1=None, R2=None, gs2=None,
         os.makedirs( ndir, exist_ok=True )
     else :
         ndir = os.getcwd()
-    output_file = ndir + os.sep + output_file.split( os.sep )[-1] + add2outname
+    output_file = ndir + os.sep + output_file.split( os.sep )[-1]
     
     if os.path.isfile( output_file ) == True :
         os.remove( output_file )
 
     # Transform input data type -----------------------------------------------    
-    x,y = np.asarray(x).ravel(), np.asarray(y).ravel()
-    if z == 'dtm' :
-        z = rt.xy2rasterVal( dtm1, x, y, prjcode=prjcode_in )[0]
-    if type(z) in ( int, float ) :
-        z = np.full( x.shape, z )
-    else:
-        z = np.asarray(z).ravel()
+    x,y,z = np.asarray(x).ravel(), np.asarray(y).ravel(), np.asarray(z).ravel()
     st_type = np.asarray(st_type).ravel()
     
     # Stations  coordinates conversions ---------------------------------------
@@ -919,18 +737,22 @@ def te( x, y, dtm1, z='dtm', gs1=None, dtm2=None, R1=None, R2=None, gs2=None,
     xg, yg = utl.prjxy( prjcode_in, prjcode_g, x, y )  # geo coordinates 
     xrmg ,yrmg = np.mean( xg ), np.mean( yg )  # geo coordinates of middle point
     # Convert to metric coordinates using orthographic projection
-    prjcode_m = f'+proj=ortho +lon_0={xrmg} +lat_0={yrmg} +ellps=sphere +R={R}'
+    if prjcode_m is None : 
+        prjcode_m = f'+proj=ortho +lon_0={xrmg} +lat_0={yrmg} +ellps=sphere +R={R}'
     xm, ym = utl.prjxy( prjcode_g, prjcode_m, xg, yg ) # metric coordinates
     
-    # First "large crop/resempling" operation on raster input files -----------
+    # First "large crop/resempling operation" on raster input files -----------
     # This will reduces the dtm model to the chosen limits and grid_step.
-    # NB. A second "small crop/sempling" is done within the function 'mesh_xyz'.
-    # NB.NB. Gdal functions are SUPER-FAST, if compared to scipy griddata. 
-    # Gdal functions make use of '.vrt' formats to create intermidiate-step datasets,
-    # which permit superfast on-grid operations.
-    # So, point is, better use gdal when dealing with large dtm arrays. 
+    # NB. A second "small crop/sempling operation" is done within the function 'mesh_xyz',
+    # around each station point.
+    # NB.NB. We decided to use Gdal functions because they are SUPER-FAST, 
+    # when compared to scipy griddata functions. 
+    # Gdal functions make use of '.vrt' file-formats to create intermidiate-step datasets.
+    # The vrt format allowes superfast on-grid operations.
+    # Therefore, our chice is motivated by the fact that Gdal is much more performing 
+    # than any other pythonic method when dealing with large dtm arrays. 
     # More info https://gdal.org/user/virtual_file_systems.html.
-
+    
     if type( dtm1 ) == str : 
         gdal.Open( dtm1 )
         
@@ -940,74 +762,69 @@ def te( x, y, dtm1, z='dtm', gs1=None, dtm2=None, R1=None, R2=None, gs2=None,
     if dtm2 == None : 
         dtm2 = dtm1
         
-        
     # Get dtm1 values at the station point ------------------------------------
     zdtm = rt.xy2rasterVal( dtm1, x, y, prjcode=prjcode_in  )[0]           
-
     # Estimate R1 -------------------------------------------------------------
     if R1==None:
         R1 = Radi1( herr, R=R )      
 
     # Define lim1 -------------------------------------------------------------
     minx, maxx, miny, maxy = np.min(xm), np.max(xm), np.min(ym), np.max(ym)
-    lim1 = [ minx-2*R1, maxx+2*R1, miny-2*R1, maxy+2*R1 ]
-    Symin = str( np.round( lim1[0], 5 ) ).replace( '.', 'p' ).replace('-', 'm') 
-    Symax = str( np.round( lim1[-1], 5 ) ).replace( '.', 'p' ).replace('-', 'm') 
-    new_name_dtm1 = 'dtm1'+'_'+Symin+'_'+Symax
+    lim1 = [ minx-R1-gs1, maxx+R1+gs1, miny-R1-gs1, maxy+R1+gs1 ]
     
     # Create dtm1 -------------------------------------------------------------
-    print( "LOADING/CREATING DTM_1 ...")
-    if gs1 == None: # Take gs1 from maximum gridstep of dtm1
-        dtm1 = rt.raster_warp( dtm1, out_prjcode=prjcode_m, 
-                                new_path=ndir+os.sep+'dtm1', new_name='dtm1n', close=True )
-        gt = rt.raster_res( dtm1 )
-        gs1 = np.max( ( gt[0], gt[1] ) )   
-        
-    # Crop-Sample to lim1 -------------------------------------------------
-    dtm_t1 = rt.raster_warp( dtm1, 
-                                lim1, 
-                                xRes = gs1, 
-                                yRes = gs1, 
-                                out_prjcode = prjcode_m, 
-                                lim_prjcode = prjcode_m, 
-                                method = gdal.GRA_Average, 
-                                dstNodata = 0,
-                                new_name = 'dtmt1', 
-                                new_path = ndir + os.sep + 'dtm1', 
-                                extension = 'tif',
-                                close = True )  
+    print( "LOADING/CREATING DTM_1 ...")        
+    if ( os.path.isfile( ndir + os.sep + 'dtm1' + os.sep + 'dtm1.tif' ) is False ) or \
+       ( new_dtm is True ) :       
+        if gs1 == None: # Take gs1 from maximum gridstep of dtm1
+            res1 = rt.raster_res( dtm1 )
+            gs1 = np.mean( res1 )  
+          
+        #    
+        # Crop-Sample to lim1 -------------------------------------------------
+        dtm_t1 = rt.raster_warp( dtm1, 
+                                 lim1, 
+                                 xRes = gs1, 
+                                 yRes = gs1, 
+                                 out_prjcode = prjcode_m, 
+                                 lim_prjcode = prjcode_m, 
+                                 method = gdal.GRA_Average, 
+                                 dstNodata = 0,
+                                 new_name = 'dtmt1', 
+                                 new_path = ndir + os.sep + 'dtm1', 
+                                 extension = 'tif',
+                                 close = True )  
 
-    # Adjust dtm1 values at station points --------------------------------
-    if ( adjust_dtm is True ) and ( z != 'dtm' ) :
-        dtm_t1= rt.raster_edit( dtm_t1, x, y, z, prjcode=prjcode_in, band=1, close=True,
-                                path=ndir+os.sep+'dtm1', new_name='dtmt1', suffix='_e' ) 
+        # Adjust dtm1 values at station points --------------------------------
+        if ( adjust_dtm is True ) :
+            if ( type( z[0].astype(object) ) == str ) and ( z[0].astype(object) == 'dtm' ) :
+                z = zdtm
+            print( 'ok ')
+            dtm_t1= rt.raster_edit( dtm_t1, x, y, z, prjcode=prjcode_in, band=1, close=True,
+                                    path=ndir+os.sep+'dtm1', new_name='dtmt1', suffix='_e' ) 
+              
+        # Create mask for dtm_r1 from coastline polygon (if exist) ------------
+        if ply_coast != None :    
+            print('Add coast band')
+            dtm1_new = rt.add_coastline_band( dtm_t1, ply_coast, 
+                                              new_path=ndir+os.sep+'dtm1', new_name='dtm1' )
+        else:
+            dtm1_new = rt.raster_save( dtm_t1, new_path=ndir+os.sep+'dtm1', new_name='dtm1', 
+                                       extension='tif', close=True)
+
+        # Remove temporary rasters --------------------------------------------
+        del dtm1, dtm_t1
+        
+        if os.path.exists( ndir + os.sep + 'dtm1' + os.sep + 'dtmt1.tif' ):
+            os.remove( ndir + os.sep + 'dtm1' + os.sep + 'dtmt1.tif' ) 
             
-    # Create mask for dtm_r1 from coastline polygon (if exist) ------------
-    if ply_coast != None :    
-        print('Add coast band')
-        print( rt.raster_extension(dtm_t1) )
-        dtm1_new = rt.add_coastline_band( dtm_t1, ply_coast, 
-                                            new_path=ndir+os.sep+'dtm1', 
-                                            new_name=new_name_dtm1 )
+        if os.path.exists( ndir + os.sep + 'dtm1' + os.sep + 'dtmt1_e.tif' ):
+            os.remove( ndir + os.sep + 'dtm1' + os.sep + 'dtmt1_e.tif' )         
+    else :
+        dtm1_new = ndir + os.sep + 'dtm1' + os.sep + 'dtm1.tif' 
         
-    else:
-        dtm1_new = rt.raster_save( dtm_t1, new_path=ndir+os.sep+'dtm1', 
-                                    new_name=new_name_dtm1, 
-                                    extension='tif', close=True)
-
-    # Remove temporary rasters --------------------------------------------
-    del dtm1, dtm_t1
-    
-    if os.path.exists( ndir + os.sep + 'dtm1' + os.sep + 'dtmt1.tif' ):
-        os.remove( ndir + os.sep + 'dtm1' + os.sep + 'dtmt1.tif' ) 
-        
-    if os.path.exists( ndir + os.sep + 'dtm1' + os.sep + 'dtmt1_e.tif' ):
-        os.remove( ndir + os.sep + 'dtm1' + os.sep + 'dtmt1_e.tif' )         
-
-    dtm1_new = ndir + os.sep + 'dtm1' + os.sep + new_name_dtm1 +'.tif'
-
     # Estimate gs2 ------------------------------------------------------------
-    print( "LOADING/CREATING DTM_2 ...")               
+    print( "LOADING/CREATING DTM_2 ...")
     if gs2 == None : 
         topo_array = rt.raster2array( dtm1_new )[2]
         h = np.std( np.sqrt( topo_array**2 ) *2 ) + np.mean( np.sqrt( topo_array**2 ) )   
@@ -1017,7 +834,7 @@ def te( x, y, dtm1, z='dtm', gs1=None, dtm2=None, R1=None, R2=None, gs2=None,
             gs2 = gs1
         if gs2 > R1 : 
             gs2 = R1
-
+        
     # Estimate R2 ---------------------------------------------------------           
     if R2==None :  
         Rmax = 167*1e3
@@ -1034,54 +851,52 @@ def te( x, y, dtm1, z='dtm', gs1=None, dtm2=None, R1=None, R2=None, gs2=None,
                                  close = False)
         topo_array = dtmmax.GetRasterBand(1).ReadAsArray()
         h = np.mean( np.sqrt( topo_array**2 ) )
-        print( 'Average Slab Thickness, Ring_2 =' + str( h ) )         
+        print( 'Average Slab Thickness, Ring_2 =' + str( h ) )
         R2, R2_deg = Radi2( R1, h, errg, gs2 )[0]
         if R2 < R1 : 
             R2 = R1
         dtmmax = None   
     
     # Create dtm2 ------------------------------------------------------------- 
-    lim2 = [ minx-R2-gs2, maxx+R2+gs2, miny-R2-gs2, maxy+R2+gs2 ]
-    Symin = str( np.round( lim2[0], 5 ) ).replace( '.', 'p' ).replace('-', 'm') 
-    Symax = str( np.round( lim2[-1], 5 ) ).replace( '.', 'p' ).replace('-', 'm')  
-    new_name_dtm2 = 'dtm2'+'_'+Symin+'_'+Symax
-    # Crop-Resample dtm2 based on R2 and gs2 ------------------------------
-    dtm_t2 = rt.raster_warp( dtm2, 
-                                lim2, 
-                                xRes = gs2, 
-                                yRes = gs2, 
-                                out_prjcode = prjcode_m, 
-                                lim_prjcode = prjcode_m, 
-                                method = gdal.GRA_Average, 
-                                dstNodata = 0, 
-                                new_name ='dtmt2', 
-                                new_path = ndir+os.sep+'dtm2', 
-                                extension = 'tif',
-                                close = False ) 
-    
-    # Create mask for dtm_r1 from coastline polygon (if exist) ------------
-    if ply_coast != None :    
-        dtm2_new = rt.add_coastline_band( dtm_t2, ply_coast, 
-                                            new_path=ndir+os.sep+'dtm2', 
-                                            new_name=new_name_dtm2 )
+    if ( os.path.isfile( ndir + os.sep + 'dtm2' + os.sep + 'dtm2.tif' ) is False ) or \
+       ( new_dtm is True ) : 
+        
+        # Crop-Resample dtm2 based on R2 and gs2 ------------------------------
+        lim2 = [ minx-R2-gs2, maxx+R2+gs2, miny-R2-gs2, maxy+R2+gs2 ]          
+        dtm_t2 = rt.raster_warp( dtm2, 
+                                 lim = lim2, 
+                                 xRes = gs2, 
+                                 yRes = gs2, 
+                                 out_prjcode = prjcode_m, 
+                                 lim_prjcode = prjcode_m, 
+                                 method = gdal.GRA_Average, 
+                                 dstNodata = 0, 
+                                 new_name ='dtmt2', 
+                                 new_path = ndir+os.sep+'dtm2', 
+                                 extension = 'tif',
+                                 close = False ) 
+        
+        # Create mask for dtm_r1 from coastline polygon (if exist) ------------
+        if ply_coast != None :    
+            dtm2_new = rt.add_coastline_band( dtm_t2, ply_coast, 
+                                              new_path=ndir+os.sep+'dtm2', new_name='dtm2' )
+        else:
+            dtm2_new = rt.raster_save( dtm_t2, new_path=ndir+os.sep+'dtm2', new_name='dtm2', 
+                                       extension='tif', close=True)
+        
+        # Remove temporary rasters --------------------------------------------
+        del dtm2, dtm_t2 
+        os.remove( ndir + os.sep + 'dtm2' + os.sep + 'dtmt2.tif' )
+        
     else:
-        dtm2_new = rt.raster_save( dtm_t2, new_path=ndir+os.sep+'dtm2', 
-                                    new_name=new_name_dtm2, 
-                                    extension='tif', close=True)
-    
-    # Remove temporary rasters --------------------------------------------
-    del dtm2, dtm_t2 
-    os.remove( ndir + os.sep + 'dtm2' + os.sep + 'dtmt2.tif' )
-    dtm2_new = ndir + os.sep + 'dtm2' + os.sep + new_name_dtm2 +'.tif'
+        dtm2_new = ndir + os.sep + 'dtm2' + os.sep + 'dtm2.tif' 
                 
     # Convert station attributes into iterable objects ------------------------
     if np.size( st_type ) < 2 :
        st_type = np.repeat( int( st_type ), np.size( xg ) )
-    # if ( np.size( xg ) > 1 ) and ( np.size( z ) == 1 ) and ( type( z ) in [float,int] ) :
-    if (np.size(xg) > 1) and isinstance(z, (float, int)) and (np.size(z) == 1):
-       z = np.repeat( z, np.size( xg ) ) # if z is only one constant variable       
-    # if z == 'dtm' :
-    if isinstance(z, str) and z == 'dtm':
+    if ( np.size( xg ) > 1 ) and ( np.size( z ) == 1 ) and ( type( z ) in [float,int] ) :
+       z = np.repeat( z, np.size( xg ) ) # if z is only one constant variable
+    if ( type( z[0].astype(object) ) == str ) and ( z[0].astype(object) == 'dtm' ) :
        z = zdtm
     # Create empty arrays to allocate: 1)topo_effect_NearF, 2)topo_effect_FarF, 
     # 3)topo_effect_tot    
@@ -1116,65 +931,46 @@ def te( x, y, dtm1, z='dtm', gs1=None, dtm2=None, R1=None, R2=None, gs2=None,
     
     with open(output_file, 'w') as f:
         f.write(header + '\n')
-    f.close()
+        f.close()
         
-    # START ITERATION =====================================================
-    # Iterative computation over each input grav. station (index st_num) --
-    if R3 >= R2 : 
-        R3 = None
-
-    # Constant arguments
-    print( dtm1_new, dtm2_new)
-    constant_arg = ( R1, R2, R3, gs1, gs2, 
-                        dtm1_new, dtm2_new, prjcode_g, tess, R, dc, dw, 
-                        disable_checks, tot_len, adjust_dtm, output_file )
-    
-    # Iterable arguments
-    iterable_arg = np.column_stack( ( xg, yg, z, st_num, st_type, te, te_near, te_far, zdtm ) ) 
-
-    partial = functools.partial( st_loop, constant_arg )
-
-    if cpu is None :
-        cpu = 1
-
-    print( "LOOP STARTED ( #cpu:",cpu,") ...")
-    print( header )
-
-    if cpu > 1 :
-        with mpr.Pool(cpu) as p :
-            Te_list = list(zip(*p.map(partial, iterable_arg)))
-
-    elif cpu == 1:
-        Te_list = list(zip(*map(partial, iterable_arg)))
-
-    te = np.array( ( Te_list[0] ) ) 
-    te_near = np.array( ( Te_list[1] ) ) 
-    te_far = np.array( ( Te_list[2] ) ) 
-    z = np.array( ( Te_list[3] ) ) 
-    st_num = np.array( ( Te_list[4] ) )
-    pr1 = Te_list[5]
-    pr2 = Te_list[6]
-    
-#        array = np.column_stack( ( st_num,
-#                                   np.round(xg, 6),
-#                                   np.round(yg, 6),
-#                                   np.round(z, 3),
-#                                   np.round(zdtm, 3),
-#                                   np.round(te_near, 3),
-#                                   np.round(te_far, 3),
-#                                   np.round(te, 3),
-#                                   st_type ) )
-    
-#        # Sort array according to st_num ( it is necessary when run parallel)
-#        array = array[ np.argsort( array [ :, 0 ] ) ] 
-#        list_of_lines = a_file.readlines()
-#        fmt = '% 10d % 10f % 10f % 10.2f % 10.2f % 10.4f % 10.4f % 10.4f % 10d'
-#        np.savetxt( f, array, fmt = fmt )
+        # START ITERATION =====================================================
+        # Iterative computation over each input grav. station (index st_num) --
+        if R3 >= R2 : 
+            R3 = None
+        constant_arg = ( R1, R2, R3, gs1, gs2, 
+                         dtm1_new, dtm2_new, prjcode_g, tess, R, dc, dw, 
+                         disable_checks, tot_len, adjust_dtm, output_file, 
+                         z_shift, prjcode_m )
         
-    # END ITERATION =======================================================   
-    End = ( '==================================================================================================\n'   
-            '==================================================================================================\n'
-            f'Total_time: {time.time()-time_count} sec.' )
+        iterable_arg = np.column_stack( ( xg, yg, z, st_num, st_type, te, te_near, te_far, zdtm ) ) 
+                                          
+        patial = functools.partial( st_loop, constant_arg ) 
+
+        if cpu is None :
+            cpu = mpr.cpu_count()
+
+        print( "LOOP STARTED ( #cpu:",cpu,") ...")
+        print( header )
+        if cpu > 1 :
+            with mpr.Pool(cpu) as p :
+                Te_list = list( zip( *p.map( patial, iterable_arg ) ) )
+                
+        if cpu == 1:
+            Te_list = list( zip ( *map( patial, iterable_arg ) ) ) 
+               
+
+        te = np.array( ( Te_list[0] ) ) 
+        te_near = np.array( ( Te_list[1] ) ) 
+        te_far = np.array( ( Te_list[2] ) ) 
+        z = np.array( ( Te_list[3] ) ) 
+        st_num = np.array( ( Te_list[4] ) )
+        pr1 = Te_list[5]
+        pr2 = Te_list[6]
+            
+        # END ITERATION =======================================================   
+        End = ( '==================================================================================================\n'   
+                '==================================================================================================\n'
+               f'Total_time: {time.time()-time_count} sec.' )
         
     with open(output_file, 'w') as f:  
         f.write(header + '\n')
@@ -1184,9 +980,9 @@ def te( x, y, dtm1, z='dtm', gs1=None, dtm2=None, R1=None, R2=None, gs2=None,
                                    np.round(yg, 6),
                                    np.round(z, 3),
                                    np.round(zdtm, 3),
-                                   np.round(te_near, 3),
-                                   np.round(te_far, 3),
-                                   np.round(te, 3),
+                                   np.round(te_near, 5),
+                                   np.round(te_far, 5),
+                                   np.round(te, 5),
                                    st_type ) )
         
         # Sort array according to st_num ( it is necessary when run parallel)
@@ -1196,26 +992,18 @@ def te( x, y, dtm1, z='dtm', gs1=None, dtm2=None, R1=None, R2=None, gs2=None,
         
         f.write(End)
         print( End )
-
-    f.close() 
-        
-        # print resault
-#        with open( output_file, 'r' ) as f :
-#            print( f.read() )
-#            f.close() 
+        f.close() 
         
     return te, te_near, te_far, R1, R2, gs1, gs2, pr1, pr2 
 
 # -----------------------------------------------------------------------------
-def load_te( file, ds_type='all' ) :
+def load_te( file, ds_type='dict' ) :
     """
     Import results
     """
-
+    
     load_resoult = np.genfromtxt( file, skip_header=6, skip_footer=3 ) 
-
-    print( file )
-
+    
     array = load_resoult[ np.argsort(load_resoult[:,0]) ] 
     
     st_num, Lon, Lat, h_st, h_dtm, te_near, te_far, te_tot, st_type \
@@ -1234,102 +1022,31 @@ def load_te( file, ds_type='all' ) :
     
     # Return 
     if ds_type == 'dict' :
+        
         return d
-    if ds_type == 'array' :
-        return array
-    if ds_type == 'all' :
-        return array, d
     
-# -----------------------------------------------------------------------------   
-def merge_chunks( path, name="Te_correction", outname="Te_correction", 
-                  remove_chunks=False ) :
-
-    """
-    Merge results from chunks
-    """
-
-    chunk_files = []
-    chunk_numbers = []
-    for filename in os.listdir(path):
-        if name in filename and filename[-1].isdigit():
-            chunk_files.append( path + os.sep + filename )
-            chunk_numbers.append( int( filename.split(name)[-1] ) )
-
-    sorted_pairs = sorted(zip(chunk_numbers, chunk_files))
-    chunk_numbers, chunk_files = map(list, zip(*sorted_pairs))
-
-    Time = 0
-    for i, chunk in enumerate(chunk_files) :
-        if i == 0 :
-            arr, dic = load_te( chunk, ds_type='all' )
-            last_st_num = arr[-1, 0] + 1
-        else :
-            ai, di = load_te( chunk, ds_type='all' )
-            ai[ :, 0 ] = ai[ :, 0 ] + last_st_num
-            arr = np.vstack( ( arr, ai ) )
-            for key in dic :
-                di['st_num'] = di['st_num'] + last_st_num
-                dic[key] = np.concatenate( ( dic[key], di[key] ) )
-            last_st_num = arr[-1, 0] + 1
-
-        with open(chunk, 'r') as fi:
-            lines = fi.readlines()
-            for line in lines:
-                if 'Total_time: ' in line:
-                    words = line.split()
-                    for i in range(len(words)):
-                        if words[i] == 'Total_time:':
-                            Time += float(words[i+1])
-
-    with open(chunk_files[0], 'r') as source_file:
-        first6lines = [ next(source_file) for _ in range(6) ]
-        source_file.close()
-
-    with open(path + os.sep + outname, 'w') as new_file:
-        new_file.writelines(first6lines)
-
-        for row in arr:
-            fmt = '% 10d % 10f % 10f % 10.2f % 10.2f % 10.4f % 10.4f % 10.4f % 10d'
-            new_file.write(fmt % tuple(row) + '\n')
-
-        End = ('==================================================================================================\n'
-        '==================================================================================================\n'
-        f'Total_time: {Time} sec.')
-        new_file.write(End)
-
-        new_file.close()
-
-    if remove_chunks == True:
-
-        for i, chunk in enumerate(chunk_files):
-            if os.path.exists(chunk):
-                os.remove(chunk)
+    if ds_type == 'array' :
         
-            xyz_file = 'xyz' + str(chunk_numbers[i])
-            xyz_file_path = path + os.sep + xyz_file
+        return array
+    
+    if ds_type == 'all' :
         
-            if os.path.exists(xyz_file_path):
-                os.remove(xyz_file_path)
-
-    return arr, dic
+        return array, d
 
 # -----------------------------------------------------------------------------
 def run_te( x, y, dtm1, z='dtm', gs1=None, dtm2=None, R1=None, R2=None, gs2=None, 
             errg=0.5, herr=5, dc=2670, dw=1030, R=R_wgs84, prjcode_in=4326, tess=True,
-            prjcode_m=None, st_type=0, output_file='Te_correction', 
-            cpu=None, ply_coast=None, new_dtm=False, R3=50000,
-            run=True, chunks=1, remove_chunks=False ) :
-
+            prjcode_m=None, st_type=0, plot=None, output_file='Te_correction', 
+            disable_checks=True, cpu=None, ply_coast=None, new_dtm=False, R3=50000 ) :
+    
     # Create new directory for computation's resaults -------------------------
     cwd = os.getcwd().split( os.sep )[-1]
-
-    if output_file.split( os.sep )[-1] :
+    if cwd != output_file.split( os.sep )[-1] :
         ndir = str( np.copy( output_file ) )
         os.makedirs( ndir, exist_ok=True )
-
     else :
         ndir = os.getcwd()
-    print( ndir )
+
     xyz = np.column_stack( ( x, y ) )
     
     if type( z ) != str:
@@ -1343,95 +1060,71 @@ def run_te( x, y, dtm1, z='dtm', gs1=None, dtm2=None, R1=None, R2=None, gs2=None
     if np.size( st_type ) > 1 :
         xyz = np.column_stack( ( xyz, st_type ) )
     else:
-        xyz = np.column_stack( ( xyz, np.repeat( st_type, np.size( x ) ) ) )
+        xyz = np.column_stack( ( xyz, np.repeat( st_type, np.size( x ) ) ) )                
         
     np.savetxt( ndir + os.sep + 'xyz', xyz, fmt='%.6f %.6f %.2f %.0f' )
     
-    if type( dtm1 ) != str : 
-        dtm1 = dtm1.GetDescription()
-    if type( dtm2 ) != str and dtm2 is not None : 
-        dtm2 = dtm2.GetDescription()
-    if type( gs1 ) != str : 
-        gs1 = str( gs1 )
-    if type( R1 ) != str : 
-        R1 = str( R1 )
-    if type( gs2 ) != str : 
-        gs2 = str( gs2 )
-    if type( R2 ) != str : 
-        R2 = str( R2 )
-    if type( prjcode_in ) != str : 
-        prjcode_in = str( prjcode_in )
-    if type( prjcode_m ) != str : 
-        prjcode_m = str( prjcode_m )  
-    if type( output_file ) != str : 
-        output_file = str( output_file ) 
-    if type( cpu ) != str : 
-        cpu = str( cpu ) 
-    if type( ply_coast ) != str : 
-        ply_coast = str( ply_coast ) 
-    if type( new_dtm ) != str : 
-        new_dtm = str( new_dtm ) 
-    if type( R3 ) != str : 
-        R3 = str( R3 )  
+    if type( dtm1 ) != str : dtm1 = dtm1.GetDescription()
+    if type( dtm1 ) != str : dtm1 = dtm1.GetDescription()
+    if type( gs1 ) != str : gs1 = str( gs1 )
+    if type( R1 ) != str : R1 = str( R1 )
+    if type( gs2 ) != str : gs2 = str( gs2 )
+    if type( R2 ) != str : R2 = str( R2 )
+    if type( prjcode_in ) != str : prjcode_in = str( prjcode_in )
+    if type( prjcode_m ) != str : prjcode_m = str( prjcode_m )  
+    if type( output_file ) != str : output_file = str( output_file ) 
+    if type( cpu ) != str : cpu = str( cpu ) 
+    if type( ply_coast ) != str : ply_coast = str( ply_coast ) 
+    if type( new_dtm ) != str : new_dtm = str( new_dtm ) 
+    if type( R3 ) != str : R3 = str( R3 )  
       
     irs = prjcode_in
     pcs = prjcode_m
     out = output_file 
     
     cfn = os.path.abspath(__file__)
-
-    cmd = ''
-    for i in range( chunks ):
     
-        cmd = cmd + f'python -W ignore' + \
-                    f' {cfn}' + \
-                    f' -xyz {ndir + os.sep + "xyz"}' + \
-                    f' -dtm1 {dtm1}' + \
-                    f' -gs1 {gs1}' + \
-                    f' -R1 {R1}' + \
-                    f' -dtm2 {dtm2}' + \
-                    f' -gs2 {gs2}' + \
-                    f' -R2 {R2}' + \
-                    f' -irs {irs}' + \
-                    f' -pcs {pcs}' + \
-                    f' -out {out}' + \
-                    f' -cpu {cpu}' + \
-                    f' -ply_coast {ply_coast}' + \
-                    f' -tess {tess}' + \
-                    f' -new_dtm {new_dtm}' + \
-                    f' -R3 {R3}' + \
-                    f' -chunks {chunks} {i}'
-        if i == chunks + 1 :
-            if remove_chunks == True :
-                cmd = cmd + f' -remove_chunks True'
-        cmd = cmd + '\n\n'
-                
+    run = f'python -W ignore' + \
+          f' {cfn}' + \
+          f' -xyz {ndir + os.sep + "xyz"}' + \
+          f' -dtm1 {dtm1}' + \
+          f' -gs1 {gs1}' + \
+          f' -R1 {R1}' + \
+          f' -dtm2 {dtm2}' + \
+          f' -gs2 {gs2}' + \
+          f' -R2 {R2}' + \
+          f' -irs {irs}' + \
+          f' -pcs {pcs}' + \
+          f' -out {out}' + \
+          f' -cpu {cpu}' + \
+          f' -ply_coast {ply_coast}' + \
+          f' -tess {tess}' + \
+          f' -new_dtm {new_dtm}' + \
+          f' -R3 {R3}'
+              
     if platform.system() == 'Linux' :
         run_str = ndir + os.sep + 'run.sh'
     if platform.system() == 'Windows' :
         run_str = ndir + os.sep + 'run.bat'
         
     with open( run_str , 'w') as f :
-            f.write(cmd)
-    f.close()
-
-    if run is True :
-        os.system( run_str )
-
+              f.write(run)
+              f.close()        
+ 
+    os.system( run_str )
+    
     out_file = ndir + os.sep + output_file.split( os.sep )[-1]
-
-    result = None 
-
-    if os.path.isfile( out_file ) == True :
-        result = load_te( out_file, ds_type='all' )
+    
+    result = load_te( out_file, ds_type='all' )
+    
+    with open( out_file, 'r' ) as f :
+        print( f.read() )    
     
     return result
-
+    
 # -----------------------------------------------------------------------------
 if __name__ == '__main__' :  
-
-    time_count = time.time()
-
+        
     p = argparse.ArgumentParser()
     p.add_argument( '-xyz', '--xyz', help='input file with x, y coordinates \
                     of computational points, z is optional', type=str )
@@ -1450,61 +1143,9 @@ if __name__ == '__main__' :
     p.add_argument( '-ply_coast', '--ply_coast', default=None, type=str )
     p.add_argument( '-tess', '--tess', default=True, type=str )
     p.add_argument( '-new_dtm', '--new_dtm', default=False, type=str )
-    p.add_argument('-chunks', nargs='+', type=int, default=[0, 1])
-    p.add_argument('-remove_chunks', '--remove_chunks', default=False, type=bool)
-
-    cwd = os.getcwd().split( os.sep )[-1]
-
+                
     arg = p.parse_args()
-
-    if arg.out.split( os.sep )[-1] :
-        ndir = str( np.copy( arg.out ) )
-        os.makedirs( ndir, exist_ok=True )
-    else :
-        ndir = os.getcwd()
-
-    arg.irs = eval( arg.irs )
-    arg.pcs = eval ( arg.pcs )
-    arg.cpu = eval ( arg.cpu )
-    arg.R1 = eval ( arg.R1 )
-    arg.R2 = eval ( arg.R2 )
-    arg.gs1 = eval ( arg.gs1 )
-    arg.gs2 = eval ( arg.gs2 )
-    arg.tess = eval ( arg.tess )
-    # arg.ply_coast = eval ( arg.ply_coast )
-    arg.new_dtm = eval ( arg.new_dtm )
-    arg.R3 = eval ( arg.R3 )
-    arg.dtm2 = eval ( arg.dtm2 )
-
-    if arg.chunks[0] > 1 :
-
-        chunk_size = len(np.loadtxt( arg.xyz )) // arg.chunks[0]
-        print( chunk_size )
-        for i in range(arg.chunks[0]):
-
-            if chunk_size < arg.cpu :
-                cpu = chunk_size
-
-            if i == arg.chunks[1] :
-
-                start = i * chunk_size
-
-                if i < arg.chunks[0]-1 :
-                    end = (i + 1) * chunk_size
-                else:
-                    end = len( np.loadtxt( arg.xyz ) ) 
-
-                chunk_ranges = [ start, end-1 ]
-            
-                np.savetxt(arg.xyz + str(i), np.loadtxt( arg.xyz )[start:end], fmt='%.6f %.6f %.2f %.0f')
-
-                xyz = np.loadtxt( arg.xyz + str(i) )
-
-                out = ndir + os.sep + arg.out.split( os.sep )[-1] + str(i)
-
-    else:
-
-        xyz = np.loadtxt( arg.xyz )
+    xyz = np.loadtxt( arg.xyz )
 
     if xyz.shape[1] == 2 :
         x, y = np.hsplit( xyz, 2 )
@@ -1514,9 +1155,21 @@ if __name__ == '__main__' :
         x, y, z = np.hsplit( xyz, 3 )
         st = 0
     if xyz.shape[1] == 4 :
-        x, y, z, st_type = np.hsplit( xyz, 4 )
+        x, y, z, st_type = np.hsplit( xyz, 4 )   
     if np.any( ( z == 9999 ) ) :
-        z = np.full( np.size( x ), 9999.0 )
+        z = 'dtm'             
+              
+    arg.irs = eval( arg.irs )  
+    arg.pcs = eval ( arg.pcs )   
+    arg.cpu = eval ( arg.cpu )
+    arg.R1 = eval ( arg.R1 )
+    arg.R2 = eval ( arg.R2 )
+    arg.gs1 = eval ( arg.gs1 )
+    arg.gs2 = eval ( arg.gs2 )
+    arg.tess = eval ( arg.tess )
+    arg.ply_coast = eval ( arg.ply_coast )
+    arg.new_dtm = eval ( arg.new_dtm )
+    arg.R3 = eval ( arg.R3 )
 
     te( x, 
         y, 
@@ -1535,20 +1188,10 @@ if __name__ == '__main__' :
         ply_coast = arg.ply_coast,
         tess = arg.tess,
         new_dtm = arg.new_dtm,
-        R3 = arg.R3,
-        add2outname=str(arg.chunks[1])  )
+        R3 = arg.R3 )
     
-    merge_chunks( ndir, 
-                  name=arg.out.split( os.sep )[-1], 
-                  outname="Te_correction", 
-                  remove_chunks=arg.remove_chunks )
-
     if arg.del_xyz == True:
         os.remove( arg.xyz )
-
-    gc.collect()
-
-
+        
     
-
-     
+        
