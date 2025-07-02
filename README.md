@@ -34,7 +34,7 @@ To install all required Python modules with Conda:
 
 - On **Windows**, run:
   ```bash
-install_modules.bat
+  install_modules.bat
 
 ## 👤 Attribution & Author
 
