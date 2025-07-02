@@ -24,6 +24,17 @@ Geologists, geophysicists, students, or anyone interested in learning and experi
    ```bash
    git clone https://github.com/your-username/lszpy.git
 
+## ⚙️ Environment Setup
+
+To install all required Python modules with Conda:
+
+- On **Linux/macOS**, run:
+  ```bash
+  bash install_modules.sh
+
+- On **Windows**, run: 
+install_modules.bat
+
 ## 👤 Attribution & Author
 
 - This project was developed and is maintained by **Dr. Luigi Sante Zampa**.
