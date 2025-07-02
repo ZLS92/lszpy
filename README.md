@@ -27,9 +27,9 @@ Geologists, geophysicists, students, or anyone interested in learning and experi
 ## 👤 Attribution & Author
 
 - This project was developed and is maintained by **Dr. Luigi Sante Zampa**.
-- Parts of this project use or adapt functionalities inspired by the  
-  [**Harmonica**](https://www.fatiando.org/harmonica/latest/) library by Leonardo Uieda.  
-  If you use **LszPy**, please consider citing **Harmonica** as well:
+- Parts of this project use or adapt functionalities of the  
+  [**Harmonica**](https://www.fatiando.org/harmonica/latest/) library.  
+  If you use **LszPy**, please consider citing **Harmonica**:
 
   > Uieda, L. (2020).  
   > *Harmonica: Forward modelling and inversion for geophysics.*  
