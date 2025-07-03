@@ -9,7 +9,7 @@ Created on Fri Feb 26 20:41:12 2021
 # -----------------------------------------------------------------------------
 # Import libraries
 
-from . import utils as utl
+import utils as utl
 
 # -----------------------------------------------------------------------------
 # Set the aliases for some libraries from the utils and other module
